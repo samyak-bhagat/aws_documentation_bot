@@ -1,6 +1,6 @@
 """Unit tests for agents/nodes/context_builder.py — no LLM or MCP required."""
 
-from agents.nodes.context_builder import context_builder_node, _MAX_TOTAL_CONTEXT
+from agents.nodes.context_builder import _MAX_TOTAL_CONTEXT, context_builder_node
 
 
 def _make_doc(url: str, title: str, content: str) -> dict:
@@ -11,7 +11,9 @@ class TestContextBuilder:
     def test_single_document(self):
         state = {
             "user_query": "S3 security",
-            "documents": [_make_doc("https://docs.aws.amazon.com/s3/", "S3 Security", "Enable encryption.")],
+            "documents": [
+                _make_doc("https://docs.aws.amazon.com/s3/", "S3 Security", "Enable encryption.")
+            ],
         }
         result = context_builder_node(state)
         assert "Enable encryption." in result["context"]
@@ -44,8 +46,11 @@ class TestContextBuilder:
         # Each doc contributes ~3000 chars of content + ~50 chars of header.
         # Use 6 docs so their combined size (~18 300 chars) exceeds _MAX_TOTAL_CONTEXT (12 000).
         from agents.nodes.context_builder import _MAX_CONTENT_PER_DOC
+
         docs = [
-            _make_doc(f"https://docs.aws.amazon.com/svc{i}/", f"Doc {i}", "y" * _MAX_CONTENT_PER_DOC)
+            _make_doc(
+                f"https://docs.aws.amazon.com/svc{i}/", f"Doc {i}", "y" * _MAX_CONTENT_PER_DOC
+            )
             for i in range(6)
         ]
         state = {"user_query": "test", "documents": docs}
@@ -56,7 +61,9 @@ class TestContextBuilder:
     def test_source_url_included(self):
         state = {
             "user_query": "test",
-            "documents": [_make_doc("https://docs.aws.amazon.com/lambda/", "Lambda", "Lambda content")],
+            "documents": [
+                _make_doc("https://docs.aws.amazon.com/lambda/", "Lambda", "Lambda content")
+            ],
         }
         result = context_builder_node(state)
         assert "https://docs.aws.amazon.com/lambda/" in result["context"]

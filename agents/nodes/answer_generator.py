@@ -11,9 +11,7 @@ logger = get_logger(__name__)
 
 _PROMPT = (Path(__file__).parent.parent / "prompts" / "answer_generation.txt").read_text()
 
-_FALLBACK = (
-    "I could not find this information in the AWS documentation provided."
-)
+_FALLBACK = "I could not find this information in the AWS documentation provided."
 
 
 def make_answer_generator(llm: ChatOpenAI):

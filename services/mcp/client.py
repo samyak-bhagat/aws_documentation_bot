@@ -1,7 +1,8 @@
 """MCP client — manages the lifecycle of a stdio connection to the AWS Docs MCP Server."""
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -38,12 +39,8 @@ class MCPClient:
             from contextlib import AsyncExitStack
 
             self._exit_stack = AsyncExitStack()
-            read, write = await self._exit_stack.enter_async_context(
-                stdio_client(server_params)
-            )
-            self._session = await self._exit_stack.enter_async_context(
-                ClientSession(read, write)
-            )
+            read, write = await self._exit_stack.enter_async_context(stdio_client(server_params))
+            self._session = await self._exit_stack.enter_async_context(ClientSession(read, write))
             await self._session.initialize()
             logger.info("MCP session initialised")
         except Exception as exc:

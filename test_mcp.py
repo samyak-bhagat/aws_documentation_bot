@@ -62,7 +62,7 @@ async def main() -> None:
 
         print(f"\n  Title   : {doc.title}")
         print(f"  Sections: {doc.sections[:5]}")
-        print(f"\n  Content preview (first 800 chars):\n")
+        print("\n  Content preview (first 800 chars):\n")
         print(doc.content[:800])
         print("\n" + "=" * 60)
         print("Phase 1 PASSED — MCP tools are returning real AWS docs.")

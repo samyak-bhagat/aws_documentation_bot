@@ -5,7 +5,7 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_MIN_CONTEXT_CHARS = 300   # below this threshold we consider context insufficient
+_MIN_CONTEXT_CHARS = 300  # below this threshold we consider context insufficient
 
 
 def context_evaluator_node(state: AgentState) -> dict:

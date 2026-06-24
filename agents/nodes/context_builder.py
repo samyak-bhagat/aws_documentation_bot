@@ -5,8 +5,8 @@ from core.logging import get_logger
 
 logger = get_logger(__name__)
 
-_MAX_CONTENT_PER_DOC = 3000   # chars per document
-_MAX_TOTAL_CONTEXT = 12000    # total context chars sent to the LLM
+_MAX_CONTENT_PER_DOC = 3000  # chars per document
+_MAX_TOTAL_CONTEXT = 12000  # total context chars sent to the LLM
 
 
 def context_builder_node(state: AgentState) -> dict:

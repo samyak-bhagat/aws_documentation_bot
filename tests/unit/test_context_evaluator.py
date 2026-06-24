@@ -1,6 +1,6 @@
 """Unit tests for agents/nodes/context_evaluator.py — no LLM or MCP required."""
 
-from agents.nodes.context_evaluator import context_evaluator_node, _MIN_CONTEXT_CHARS
+from agents.nodes.context_evaluator import _MIN_CONTEXT_CHARS, context_evaluator_node
 
 
 class TestContextEvaluator:

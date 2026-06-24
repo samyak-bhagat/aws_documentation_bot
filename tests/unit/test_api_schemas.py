@@ -42,7 +42,9 @@ class TestChatResponse:
         assert resp.latency_ms == 450.5
 
     def test_empty_sources_allowed(self):
-        resp = ChatResponse(answer="Not found.", sources=[], session_id="uuid-123", latency_ms=100.0)
+        resp = ChatResponse(
+            answer="Not found.", sources=[], session_id="uuid-123", latency_ms=100.0
+        )
         assert resp.sources == []
 
 

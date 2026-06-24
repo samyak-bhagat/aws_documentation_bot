@@ -6,15 +6,14 @@ Lifespan:
   - Closes the MCP session cleanly on shutdown
 """
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.graph.builder import build_graph
 from apps.api.routers import chat, health
-from core.config import settings
 from core.logging import get_logger
 from services.mcp.client import MCPClient
 from services.mcp.tools import AWSDocsMCPTools
@@ -55,7 +54,7 @@ def create_app() -> FastAPI:
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8501"],   # Streamlit UI in Phase 8
+        allow_origins=["http://localhost:8501"],  # Streamlit UI in Phase 8
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],

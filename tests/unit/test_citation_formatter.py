@@ -48,7 +48,14 @@ class TestCitationFormatter:
     def test_title_falls_back_to_url(self):
         state = {
             "user_query": "test",
-            "documents": [{"url": "https://docs.aws.amazon.com/s3/", "title": "", "content": "", "sections": []}],
+            "documents": [
+                {
+                    "url": "https://docs.aws.amazon.com/s3/",
+                    "title": "",
+                    "content": "",
+                    "sections": [],
+                }
+            ],
         }
         result = citation_formatter_node(state)
         assert result["citations"][0]["title"] == "https://docs.aws.amazon.com/s3/"

@@ -1,8 +1,8 @@
 """Node: search AWS documentation via MCP and store ranked results."""
 
-from services.mcp.tools import AWSDocsMCPTools
 from agents.graph.state import AgentState
 from core.logging import get_logger
+from services.mcp.tools import AWSDocsMCPTools
 
 logger = get_logger(__name__)
 
