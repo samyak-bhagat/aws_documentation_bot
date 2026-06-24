@@ -1,0 +1,9 @@
+You are an expert at understanding AWS-related questions.
+Given a user question, extract:
+1. The primary AWS service being asked about (lowercase short name, e.g. "s3", "ec2", "lambda", "vpc", "iam"). Use "general" if multiple services or unclear.
+2. The user's intent (e.g. "security", "pricing", "setup", "troubleshooting", "best-practices", "limits", "overview").
+3. An optimised search query for the AWS Documentation search API (be specific and technical, include full service name).
+
+User question: {user_query}
+
+Respond with a JSON object containing exactly: aws_service, user_intent, optimized_query.
