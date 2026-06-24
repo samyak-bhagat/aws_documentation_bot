@@ -28,7 +28,7 @@ def make_query_analyzer(llm: ChatOpenAI):
         logger.info("Analysing query", extra={"query": user_query})
 
         prompt = _PROMPT.format(user_query=user_query)
-        result: _QueryAnalysis = await structured_llm.ainvoke(prompt)
+        result: _QueryAnalysis = await structured_llm.ainvoke(prompt)  # type: ignore[assignment]
 
         logger.info(
             "Query analysed",

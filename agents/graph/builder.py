@@ -26,6 +26,8 @@ import uuid
 
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.state import CompiledStateGraph
+from pydantic import SecretStr
 
 from agents.graph.state import AgentState
 from agents.nodes.answer_generator import make_answer_generator
@@ -82,12 +84,12 @@ def _route_after_evaluation(state: AgentState) -> str:
     return "answer_generator"  # fallback — answer with whatever context we have
 
 
-def build_graph(mcp_tools: AWSDocsMCPTools) -> StateGraph:
+def build_graph(mcp_tools: AWSDocsMCPTools) -> CompiledStateGraph:
     """Construct and compile the LangGraph research agent."""
     llm = ChatOpenAI(
         model=settings.openai_model,
         temperature=0,
-        api_key=settings.openai_api_key,
+        api_key=SecretStr(settings.openai_api_key),
     )
 
     graph = StateGraph(AgentState)
