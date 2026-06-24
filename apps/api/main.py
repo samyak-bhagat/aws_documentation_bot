@@ -14,11 +14,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from agents.graph.builder import build_graph
-from apps.api.routers import chat, health
+from apps.api.routers import admin, chat, health
 from core.config import settings
 from core.logging import get_logger
 from services.mcp.client import MCPClient
 from services.mcp.tools import AWSDocsMCPTools
+from services.sync.scheduler import start_scheduler, stop_scheduler
 
 logger = get_logger(__name__)
 
@@ -51,6 +52,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.graph = build_graph(mcp_tools)  # graph without per-request DB session
         app.state.mcp_connected = True
         logger.info("MCP connected — agent ready")
+
+        # Start daily knowledge sync scheduler
+        app.state.scheduler = start_scheduler(mcp_tools)
     except Exception as exc:
         logger.error("MCP connection failed", extra={"error": str(exc)})
         app.state.graph = None
@@ -61,6 +65,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield  # ── server is running ──────────────────────────────────────
 
     logger.info("Shutting down")
+    stop_scheduler()
     await client.disconnect()
     app.state.mcp_connected = False
 
@@ -88,6 +93,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(chat.router)
+    app.include_router(admin.router)
 
     return app
 
