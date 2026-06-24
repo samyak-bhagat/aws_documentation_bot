@@ -1,6 +1,6 @@
 # AWS Documentation Assistant
 
-[![CI](https://github.com/YOUR_USERNAME/aws_documentation_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_USERNAME/aws_documentation_bot/actions/workflows/ci.yml)
+[![CI](https://github.com/samyak-bhagat/aws_documentation_bot/actions/workflows/ci.yml/badge.svg)](https://github.com/samyak-bhagat/aws_documentation_bot/actions/workflows/ci.yml)
 
 An agentic RAG chatbot that answers questions about AWS services using **only official AWS documentation**, with citations back to the source.
 
