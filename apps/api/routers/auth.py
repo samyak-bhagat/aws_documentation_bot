@@ -9,7 +9,6 @@ GET  /me             — current user info
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.logging import get_logger
 from services.auth.jwt import (
@@ -53,17 +52,6 @@ class UserResponse(BaseModel):
 
 class RefreshRequest(BaseModel):
     refresh_token: str
-
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-async def _get_session(request: Request) -> AsyncSession:
-    from core.database import _session_factory
-
-    if _session_factory is None:
-        raise HTTPException(status_code=503, detail="Database not available")
-    return await _session_factory().__aenter__()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

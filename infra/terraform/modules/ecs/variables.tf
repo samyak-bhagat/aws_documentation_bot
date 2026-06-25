@@ -50,6 +50,10 @@ variable "jwt_secret_arn" {
   type = string
 }
 
+variable "opensearch_secret_arn" {
+  type = string
+}
+
 variable "opensearch_endpoint" {
   type = string
 }

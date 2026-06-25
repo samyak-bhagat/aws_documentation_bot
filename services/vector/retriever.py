@@ -1,7 +1,4 @@
-"""Hybrid retriever — vector + BM25 + RRF.
-
-Backends: Qdrant (local) or Amazon OpenSearch (AWS).
-"""
+"""Hybrid retriever — OpenSearch vector + BM25 + RRF."""
 
 from __future__ import annotations
 
@@ -10,6 +7,7 @@ from dataclasses import dataclass
 
 from core.config import settings
 from core.logging import get_logger
+from core.telemetry import trace_span
 from services.mcp.schemas import SearchResult
 from services.vector.embedder import embed_query
 
@@ -29,9 +27,6 @@ class RankedChunk:
     service_name: str
     chunk_text: str
     score: float
-
-
-# ── OpenSearch ────────────────────────────────────────────────────────────────
 
 
 async def _opensearch_vector_search(
@@ -59,7 +54,9 @@ async def _opensearch_vector_search(
     else:
         body = {"size": top_k, "query": {"knn": knn_clause}}
 
-    result = await asyncio.to_thread(client.search, index=index, body=body)
+    with trace_span("opensearch.vector_search", {"index": index}):
+        result = await asyncio.to_thread(client.search, index=index, body=body)
+
     chunks: list[RankedChunk] = []
     for hit in result.get("hits", {}).get("hits", []):
         src = hit.get("_source", {})
@@ -95,7 +92,9 @@ async def _opensearch_bm25_search(
         "size": top_k,
         "query": {"bool": {"must": must, "filter": filters}},
     }
-    result = await asyncio.to_thread(client.search, index=index, body=body)
+    with trace_span("opensearch.bm25_search", {"index": index}):
+        result = await asyncio.to_thread(client.search, index=index, body=body)
+
     chunks: list[RankedChunk] = []
     for hit in result.get("hits", {}).get("hits", []):
         src = hit.get("_source", {})
@@ -112,116 +111,12 @@ async def _opensearch_bm25_search(
     return chunks
 
 
-# ── Qdrant ────────────────────────────────────────────────────────────────────
-
-
-async def _qdrant_vector_search(
-    query: str,
-    service_name: str | None = None,
-    top_k: int = _VECTOR_TOP_K,
-) -> list[RankedChunk]:
-    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-
-    from services.vector.client import COLLECTION_NAME, get_client
-
-    client = get_client()
-    query_vector = await embed_query(query)
-
-    search_filter = None
-    if service_name:
-        search_filter = Filter(
-            must=[FieldCondition(key="service_name", match=MatchValue(value=service_name))]
-        )
-
-    results = await client.query_points(
-        collection_name=COLLECTION_NAME,
-        query=query_vector,
-        query_filter=search_filter,
-        limit=top_k,
-        with_payload=True,
-    )
-
-    chunks: list[RankedChunk] = []
-    for hit in results.points:
-        p = hit.payload or {}
-        chunks.append(
-            RankedChunk(
-                url=p.get("url", ""),
-                title=p.get("title", ""),
-                section=p.get("section", ""),
-                service_name=p.get("service_name", ""),
-                chunk_text=p.get("chunk_text", ""),
-                score=hit.score,
-            )
-        )
-    return chunks
-
-
-async def _qdrant_bm25_search(
-    query: str,
-    service_name: str | None = None,
-    top_k: int = _BM25_TOP_K,
-) -> list[RankedChunk]:
-    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-    from rank_bm25 import BM25Okapi
-
-    from services.vector.client import COLLECTION_NAME, get_client
-
-    client = get_client()
-    search_filter = None
-    if service_name:
-        search_filter = Filter(
-            must=[FieldCondition(key="service_name", match=MatchValue(value=service_name))]
-        )
-
-    records, _ = await client.scroll(
-        collection_name=COLLECTION_NAME,
-        scroll_filter=search_filter,
-        limit=2000,
-        with_payload=True,
-        with_vectors=False,
-    )
-
-    if not records:
-        return []
-
-    corpus = [r.payload.get("chunk_text", "") if r.payload else "" for r in records]
-    tokenised = [doc.lower().split() for doc in corpus]
-    bm25 = BM25Okapi(tokenised)
-    query_tokens = query.lower().split()
-    scores = bm25.get_scores(query_tokens)
-
-    top_indices = sorted(range(len(scores)), key=lambda i: scores[i], reverse=True)[:top_k]
-
-    chunks: list[RankedChunk] = []
-    for idx in top_indices:
-        if scores[idx] <= 0:
-            continue
-        p = records[idx].payload or {}
-        chunks.append(
-            RankedChunk(
-                url=p.get("url", ""),
-                title=p.get("title", ""),
-                section=p.get("section", ""),
-                service_name=p.get("service_name", ""),
-                chunk_text=p.get("chunk_text", ""),
-                score=float(scores[idx]),
-            )
-        )
-    return chunks
-
-
-# ── Public vector / BM25 API ──────────────────────────────────────────────────
-
-
 async def vector_search(
     query: str,
     service_name: str | None = None,
     top_k: int = _VECTOR_TOP_K,
 ) -> list[RankedChunk]:
-    if settings.use_opensearch:
-        return await _opensearch_vector_search(query, service_name, top_k)
-    return await _qdrant_vector_search(query, service_name, top_k)
+    return await _opensearch_vector_search(query, service_name, top_k)
 
 
 async def bm25_search(
@@ -229,9 +124,7 @@ async def bm25_search(
     service_name: str | None = None,
     top_k: int = _BM25_TOP_K,
 ) -> list[RankedChunk]:
-    if settings.use_opensearch:
-        return await _opensearch_bm25_search(query, service_name, top_k)
-    return await _qdrant_bm25_search(query, service_name, top_k)
+    return await _opensearch_bm25_search(query, service_name, top_k)
 
 
 def reciprocal_rank_fusion(

@@ -1,8 +1,8 @@
 """Node: search AWS documentation.
 
-Strategy (Phase 7+):
-  1. If Qdrant has indexed docs for this service → hybrid search (vector + BM25 + RRF)
-  2. Otherwise → fall back to MCP keyword search and update cache/index
+Strategy:
+  1. If OpenSearch has indexed docs → hybrid search (vector + BM25 + RRF)
+  2. Otherwise → fall back to MCP keyword search
 """
 
 from agents.graph.state import AgentState
@@ -21,14 +21,11 @@ def make_doc_searcher(mcp_tools: AWSDocsMCPTools):
         query = state["optimized_query"]
         logger.info("Searching docs", extra={"query": query})
 
-        # ── Try hybrid search if Qdrant has any indexed docs ─────────────
-        # Check without service filter — semantic search handles relevance.
-        # Service name is passed as a soft hint, not a hard filter.
         try:
             from services.vector.retriever import hybrid_search
             from services.vector.store import collection_has_docs
 
-            has_docs = await collection_has_docs()  # no service filter
+            has_docs = await collection_has_docs()
             if has_docs:
                 results = await hybrid_search(query, service_name=None, top_n=_SEARCH_LIMIT)
                 if results:
@@ -39,7 +36,6 @@ def make_doc_searcher(mcp_tools: AWSDocsMCPTools):
                 "Hybrid search unavailable — falling back to MCP", extra={"error": str(exc)}
             )
 
-        # ── Fallback: MCP search ──────────────────────────────────────
         results = await mcp_tools.search_documentation(query, limit=_SEARCH_LIMIT)
         serialised = [r.model_dump() for r in results]
         logger.info("MCP search used", extra={"result_count": len(serialised)})

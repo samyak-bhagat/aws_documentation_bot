@@ -10,11 +10,8 @@ from services.mcp.schemas import DocumentContent, SearchResult
 
 logger = get_logger(__name__)
 
-# MCP tool names as defined by the AWS Documentation MCP Server
 _TOOL_SEARCH = "search_documentation"
 _TOOL_READ = "read_documentation"
-_TOOL_READ_SECTIONS = "read_sections"
-_TOOL_RECOMMEND = "recommend"
 
 
 def _extract_text(content: Any) -> str:
@@ -64,7 +61,6 @@ class AWSDocsMCPTools:
         raw_text = _extract_text(result.content)
         parsed = _parse_json_or_text(raw_text)
 
-        # The server returns a SearchResponse dict with a "search_results" key
         if isinstance(parsed, dict) and "search_results" in parsed:
             return [self._sr_from_dict(item) for item in parsed["search_results"]]
 
@@ -95,41 +91,7 @@ class AWSDocsMCPTools:
                 sections=parsed.get("sections", []),
             )
 
-        # The server returns raw markdown directly
         return DocumentContent(url=url, title="", content=raw_text, sections=[])
-
-    async def read_sections(self, url: str, section_titles: list[str]) -> str:
-        """Return specific sections of a documentation page as markdown."""
-        logger.info("Reading sections", extra={"url": url, "sections": section_titles})
-        try:
-            result = await self._client.call_tool(
-                _TOOL_READ_SECTIONS,
-                {"url": url, "section_titles": section_titles},
-            )
-        except Exception as exc:
-            raise MCPToolError(_TOOL_READ_SECTIONS, str(exc)) from exc
-
-        return _extract_text(result.content)
-
-    async def recommend(self, url: str) -> list[SearchResult]:
-        """Return related pages recommended by the MCP server."""
-        logger.info("Fetching recommendations", extra={"url": url})
-        try:
-            result = await self._client.call_tool(
-                _TOOL_RECOMMEND,
-                {"url": url},
-            )
-        except Exception as exc:
-            raise MCPToolError(_TOOL_RECOMMEND, str(exc)) from exc
-
-        raw_text = _extract_text(result.content)
-        parsed = _parse_json_or_text(raw_text)
-
-        if isinstance(parsed, dict) and "recommendations" in parsed:
-            return [self._sr_from_dict(item) for item in parsed["recommendations"]]
-        if isinstance(parsed, list):
-            return [self._sr_from_dict(item) for item in parsed]
-        return []
 
     @staticmethod
     def _sr_from_dict(item: Any) -> SearchResult:

@@ -24,7 +24,6 @@ import asyncio
 import sys
 import uuid
 
-from services.llm.factory import get_chat_llm
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +37,7 @@ from agents.nodes.doc_reader import make_doc_reader
 from agents.nodes.doc_searcher import make_doc_searcher
 from agents.nodes.query_analyzer import make_query_analyzer
 from core.logging import get_logger
+from services.llm.factory import get_chat_llm
 from services.mcp.client import get_mcp_client
 from services.mcp.tools import AWSDocsMCPTools
 

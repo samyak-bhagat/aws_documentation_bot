@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install mypy + stubs
-        run: pip install mypy pydantic pydantic-settings langchain-openai langgraph fastapi
+        run: pip install mypy pydantic pydantic-settings langchain-aws langgraph fastapi
 
       - name: Run mypy
         run: mypy services/ agents/ apps/ core/ --ignore-missing-imports
@@ -48,8 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: type-check
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-      OPENAI_MODEL: gpt-4o-mini
+      APP_ENV: development
       MCP_SERVER_COMMAND: uvx
       MCP_SERVER_ARGS: awslabs.aws-documentation-mcp-server@latest
     steps:

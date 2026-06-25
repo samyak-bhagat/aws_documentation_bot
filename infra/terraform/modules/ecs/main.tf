@@ -34,6 +34,7 @@ resource "aws_ecs_task_definition" "api" {
       protocol      = "tcp"
     }]
     environment = [
+      { name = "APP_ENV", value = "production" },
       { name = "AWS_REGION", value = var.aws_region },
       { name = "BEDROCK_REGION", value = var.aws_region },
       { name = "BEDROCK_MODEL_ID", value = var.bedrock_model_id },
@@ -46,7 +47,16 @@ resource "aws_ecs_task_definition" "api" {
     secrets = [
       { name = "DATABASE_URL", valueFrom = "${var.db_secret_arn}:url::" },
       { name = "JWT_SECRET", valueFrom = "${var.jwt_secret_arn}:jwt_secret::" },
+      { name = "OPENSEARCH_USERNAME", valueFrom = "${var.opensearch_secret_arn}:username::" },
+      { name = "OPENSEARCH_PASSWORD", valueFrom = "${var.opensearch_secret_arn}:password::" },
     ]
+    healthCheck = {
+      command     = ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')\""]
+      interval    = 30
+      timeout     = 5
+      retries     = 3
+      startPeriod = 120
+    }
     logConfiguration = {
       logDriver = "awslogs"
       options = {

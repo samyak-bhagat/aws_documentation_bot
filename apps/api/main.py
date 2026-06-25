@@ -1,9 +1,10 @@
-"""FastAPI application — Phase 8.
+"""FastAPI application.
 
 Lifespan:
+  - Validates production configuration
   - Opens a single MCP session on startup (shared by all requests)
-  - Initialises PostgreSQL tables (if DATABASE_URL is set)
-  - Connects Qdrant (if QDRANT_URL is set)
+  - Runs Alembic migrations and connects PostgreSQL
+  - Connects Amazon OpenSearch
   - Starts daily knowledge sync scheduler
   - Closes all resources cleanly on shutdown
 """
@@ -21,6 +22,7 @@ from agents.graph.builder import build_graph
 from apps.api.routers import admin, auth, chat, health
 from core.config import settings
 from core.logging import get_logger
+from core.telemetry import init_telemetry, instrument_fastapi
 from services.mcp.client import MCPClient
 from services.mcp.tools import AWSDocsMCPTools
 from services.sync.scheduler import start_scheduler, stop_scheduler
@@ -28,42 +30,60 @@ from services.vector.store import close_vector_store, init_vector_store
 
 logger = get_logger(__name__)
 
-# ── Rate limiter (shared across the app) ─────────────────────────────────────
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Startup: connect MCP + init DB + init Qdrant. Shutdown: close all cleanly."""
-    # ── Database (optional — skipped if DATABASE_URL is empty) ────────
+    """Startup: validate config, connect MCP, DB, OpenSearch. Shutdown: close all cleanly."""
+    init_telemetry()
+    settings.validate_production_config()
+
     app.state.db_available = False
+    app.state.vector_available = False
+    app.state.mcp_connected = False
+    app.state.scheduler_running = False
+
     if settings.database_url:
-        try:
+        if settings.is_production:
             from core.database import init_db
 
             await init_db()
             app.state.db_available = True
-            logger.info("PostgreSQL connected and tables ready")
-        except Exception as exc:
-            logger.warning(
-                "PostgreSQL unavailable — running without DB cache", extra={"error": str(exc)}
-            )
+            logger.info("PostgreSQL connected and migrations applied")
+        else:
+            try:
+                from core.database import init_db
 
-    # ── Qdrant (optional) ────────────────────────────────────────────
-    app.state.vector_available = False
+                await init_db()
+                app.state.db_available = True
+                logger.info("PostgreSQL connected and migrations applied")
+            except Exception as exc:
+                logger.warning(
+                    "PostgreSQL unavailable — running without DB cache",
+                    extra={"error": str(exc)},
+                )
+    elif settings.is_production:
+        raise RuntimeError("DATABASE_URL is required in production")
+
     if settings.vector_search_enabled:
-        try:
+        if settings.is_production:
             await init_vector_store()
             app.state.vector_available = True
-            backend = "opensearch" if settings.use_opensearch else "qdrant"
-            logger.info("Vector store connected", extra={"backend": backend})
-        except Exception as exc:
-            logger.warning(
-                "Vector store unavailable — running without vector search",
-                extra={"error": str(exc)},
-            )
+            logger.info("OpenSearch connected")
+        else:
+            try:
+                await init_vector_store()
+                app.state.vector_available = True
+                logger.info("OpenSearch connected")
+            except Exception as exc:
+                logger.warning(
+                    "OpenSearch unavailable — running without vector search",
+                    extra={"error": str(exc)},
+                )
+    elif settings.is_production:
+        raise RuntimeError("OPENSEARCH_ENDPOINT is required in production")
 
-    # ── MCP server ────────────────────────────────────────────────────
     logger.info("Starting up — connecting to MCP server")
     client = MCPClient()
     try:
@@ -75,18 +95,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         app.state.mcp_connected = True
         logger.info("MCP connected — agent ready")
 
-        app.state.scheduler = start_scheduler(mcp_tools, db_available=app.state.db_available)
+        scheduler = start_scheduler(mcp_tools, db_available=app.state.db_available)
+        app.state.scheduler = scheduler
+        app.state.scheduler_running = scheduler.running
     except Exception as exc:
+        if settings.is_production:
+            raise
         logger.error("MCP connection failed", extra={"error": str(exc)})
         app.state.graph = None
         app.state.mcp_tools = None
         app.state.mcp_client = client
         app.state.mcp_connected = False
 
-    yield  # ── server is running ──────────────────────────────────────
+    yield
 
     logger.info("Shutting down")
     stop_scheduler()
+    app.state.scheduler_running = False
     await client.disconnect()
     app.state.mcp_connected = False
 
@@ -103,18 +128,16 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="AWS Documentation Assistant",
         description="Answers AWS questions using only official AWS documentation via MCP.",
-        version="0.8.0",
+        version="0.9.0",
         lifespan=lifespan,
     )
 
-    # ── Rate limiting ─────────────────────────────────────────────────
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
-    # ── CORS ──────────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8501"],  # Streamlit UI
+        allow_origins=["http://localhost:8501"],
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -124,6 +147,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(admin.router)
+
+    instrument_fastapi(app)
 
     return app
 

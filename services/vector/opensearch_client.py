@@ -74,7 +74,7 @@ def _index_mapping() -> dict[str, Any]:
                     "dimension": VECTOR_SIZE,
                     "method": {
                         "name": "hnsw",
-                        "space_type": "cosinesimil",
+                        "space_type": "innerproduct",
                         "engine": "faiss",
                     },
                 },

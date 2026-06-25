@@ -24,9 +24,12 @@ Provisions the full AWS stack from scratch for the AWS Documentation Bot:
 
 2. **Terraform** >= 1.6 — https://developer.hashicorp.com/terraform/install
 
-3. **Enable Bedrock models** in AWS Console:
-   - Amazon Bedrock → Model access → enable Claude 3.5 Sonnet + Titan Embed Text v2
+3. **Enable Bedrock models** in AWS Console (required — app uses Bedrock only):
+   - Amazon Bedrock → Model access → enable models matching `terraform.tfvars`:
+     - Chat: `bedrock_model_id` (default Claude Sonnet 4.5)
+     - Embeddings: `amazon.titan-embed-text-v2:0`
    - Region must match `aws_region` (default `us-east-1`)
+   - Verify: `python scripts/check_aws_access.py`
 
 4. **Docker** — for building and pushing images to ECR
 
@@ -94,25 +97,41 @@ aws ecs update-service --cluster aws-docs-bot-dev-cluster --service aws-docs-bot
 
 Open the ALB URL from `terraform output alb_dns_name`.
 
+```powershell
+$ALB = terraform output -raw alb_dns_name
+curl "$ALB/health/ready"
+curl "$ALB/health"
+```
+
 - UI: `http://<alb-dns>/`
-- API health: `http://<alb-dns>/health`
-- Chat: `POST http://<alb-dns>/chat`
+- API readiness: `http://<alb-dns>/health/ready` (must return **200** with all dependencies `true`)
+- API liveness: `http://<alb-dns>/health`
+
+Run the AWS/Bedrock sanity check locally:
+
+```powershell
+python scripts/check_aws_access.py
+```
 
 ## Step 5 — GitHub Actions deploy (optional)
 
 1. Re-run `terraform apply` with `enable_github_oidc = true` in `terraform.tfvars`
 2. Add GitHub secret: `AWS_ROLE_ARN` = output `github_actions_role_arn`
-3. Push to `main` — `.github/workflows/deploy.yml` builds, scans, and deploys
+3. **Remove** obsolete secret `OPENAI_API_KEY` (no longer used after Phase 9)
+4. Push to `main` — `.github/workflows/deploy.yml` builds and deploys
 
-## Application code changes still required
+Full post-deploy checklist: [`docs/post-deploy-runbook.md`](../../docs/post-deploy-runbook.md)
 
-Infrastructure alone is not enough. Before the app works on AWS you still need:
+## Phase 9 infrastructure notes
 
-- Replace OpenAI with **Bedrock** in agent nodes and `services/vector/embedder.py`
-- Replace Qdrant with **OpenSearch** in `services/vector/client.py`
-- Update `core/config.py` for new environment variables
+After merging AWS-native Phase 9, re-run `terraform apply` to pick up:
 
-See the migration plan in the project chat / `AGENT.md` Phase 8.
+| Resource | Change |
+|----------|--------|
+| ECS API task | `APP_ENV=production`, container health check on `/health/ready` |
+| ALB API target group | Health check path `/health/ready` |
+
+ECS task definition sets `APP_ENV=production` — the API **will not start** if Bedrock, OpenSearch, or RDS configuration is missing or invalid.
 
 ## Estimated monthly cost (dev, us-east-1)
 

@@ -28,7 +28,7 @@ AWS documentation is vast and constantly updated. Developers need accurate, cite
 |---------|----------------|
 | Grounded answers with citations | LangGraph agent + context-only answer prompt |
 | Live AWS docs access | MCP `search_documentation` / `read_documentation` tools |
-| Hybrid retrieval (optional) | Vector search (Qdrant or OpenSearch) + BM25 + RRF fusion |
+| Hybrid retrieval | Amazon OpenSearch (k-NN + BM25 + RRF fusion) |
 | Document cache | PostgreSQL `doc_cache` with SHA-256 change detection |
 | Multi-turn chat | PostgreSQL chat memory keyed by `session_id` |
 | Knowledge sync | Daily APScheduler job driven by AWS What's New RSS |
@@ -55,7 +55,7 @@ User → Streamlit UI / REST API
          │     └── Citation Formatter
          │
          ├── PostgreSQL  (doc cache, chat memory, users)
-         ├── Qdrant / OpenSearch  (vector index)
+         ├── Amazon OpenSearch  (vector index)
          └── AWS Docs MCP Server → docs.aws.amazon.com
 ```
 
@@ -93,7 +93,7 @@ flowchart TB
 
     subgraph data [Data Layer]
         PG[(PostgreSQL)]
-        VS[(Qdrant / OpenSearch)]
+        VS[(OpenSearch)]
     end
 
     MCP[AWS Docs MCP Server]
@@ -119,6 +119,7 @@ Detailed documentation lives in the `docs/` directory:
 | API Documentation | [`docs/api.md`](docs/api.md) | Full endpoint reference, request/response schemas, auth |
 | AI / RAG Strategy | [`docs/ai-rag-strategy.md`](docs/ai-rag-strategy.md) | Agent graph, retrieval pipeline, prompt strategy |
 | Deployment Strategy | [`docs/deployment-strategy.md`](docs/deployment-strategy.md) | Docker Compose, Terraform, ECS, CI/CD |
+| Post-Deploy Runbook | [`docs/post-deploy-runbook.md`](docs/post-deploy-runbook.md) | Phase 9 checklist: Terraform, Bedrock, secrets, verification |
 
 ---
 
@@ -128,10 +129,10 @@ Detailed documentation lives in the `docs/` directory:
 |----------|-------------|
 | **Language** | Python 3.12 |
 | **Backend** | FastAPI, Uvicorn, Pydantic v2, pydantic-settings, SQLAlchemy 2 (async), asyncpg |
-| **AI / LLM** | LangGraph, LangChain, OpenAI GPT-4o (local dev), Amazon Bedrock Claude (production) |
-| **Embeddings** | OpenAI `text-embedding-3-small` (dev), Amazon Titan Embed Text v2 (prod) |
+| **AI / LLM** | LangGraph, LangChain, Amazon Bedrock Claude |
+| **Embeddings** | Amazon Titan Embed Text v2 |
 | **Knowledge source** | AWS Documentation MCP Server (`awslabs.aws-documentation-mcp-server`) |
-| **Vector database** | Qdrant (local), Amazon OpenSearch Service (AWS) |
+| **Vector database** | Amazon OpenSearch Service |
 | **Keyword search** | rank-bm25 (hybrid retrieval) |
 | **Database** | PostgreSQL 16 (doc cache, chat memory, users) |
 | **Scheduling** | APScheduler (daily knowledge sync at 02:00 UTC) |
@@ -142,7 +143,7 @@ Detailed documentation lives in the `docs/` directory:
 | **DevOps** | GitHub Actions (CI + deploy), Docker, Docker Compose |
 | **Infrastructure** | Terraform ≥ 1.6 (see [`infra/terraform/README.md`](infra/terraform/README.md)) |
 | **Testing** | pytest, pytest-asyncio, pytest-cov |
-| **Linting / formatting** | Ruff, MyPy |
+| **Observability** | OpenTelemetry (FastAPI instrumentation) |
 
 ---
 
@@ -151,12 +152,12 @@ Detailed documentation lives in the `docs/` directory:
 ```
 aws_documentation_bot/
 ├── apps/
-│   ├── api/                    # FastAPI application (v0.8.0)
+│   ├── api/                    # FastAPI application (v0.9.0)
 │   │   ├── main.py             # Lifespan, CORS, rate limiter, router wiring
 │   │   ├── schemas.py          # ChatRequest, ChatResponse, HealthResponse
 │   │   └── routers/
 │   │       ├── chat.py         # POSTING POST /chat — agent invocation
-│   │       ├── health.py       # GET /health
+│   │       ├── health.py       # GET /health, /health/ready
 │   │       ├── auth.py         # /auth/register, /login, /refresh, /me
 │   │       └── admin.py        # POST /admin/sync, /admin/reindex
 │   └── ui/
@@ -171,19 +172,21 @@ aws_documentation_bot/
 │
 ├── services/
 │   ├── mcp/                    # AWS Docs MCP client and typed tool wrappers
-│   ├── llm/                    # OpenAI / Bedrock LLM factory
+│   ├── llm/                    # Bedrock LLM factory
 │   ├── cache/                  # PostgreSQL document cache (DocCache)
 │   ├── memory/                 # Multi-turn chat history
-│   ├── vector/                 # Qdrant / OpenSearch client, chunker, indexer, retriever
+│   ├── vector/                 # OpenSearch client, chunker, indexer, retriever
 │   ├── sync/                   # What's New RSS sync pipeline + scheduler
 │   └── auth/                   # JWT helpers and User model
 │
 ├── core/
 │   ├── config.py               # pydantic-settings (all env vars)
-│   ├── database.py             # Async SQLAlchemy engine + init_db
+│   ├── database.py             # Async SQLAlchemy + Alembic migrations
+│   ├── telemetry.py            # OpenTelemetry tracing
 │   └── logging.py              # Structured JSON logger
 │
-├── tests/unit/                 # 84 unit tests (no live MCP/LLM required)
+├── alembic/                    # Database migrations
+├── tests/unit/                 # 89 unit tests (no live AWS/MCP required)
 ├── infra/
 │   ├── docker/                 # Dockerfile.api, Dockerfile.ui, docker-compose.yml
 │   └── terraform/              # AWS infrastructure (VPC, ECS, RDS, OpenSearch, …)
@@ -208,8 +211,8 @@ aws_documentation_bot/
 |-------------|-------|
 | Python 3.12 | Matches CI and Docker images |
 | `uv` / `uvx` | Launches the AWS Docs MCP Server (`pip install uv`) |
-| OpenAI API key | Required for local LLM + embeddings |
-| Docker + Docker Compose | Optional — runs API, UI, PostgreSQL, and Qdrant together |
+| AWS credentials | Bedrock model access + OpenSearch endpoint (or use ECS) |
+| Docker + Docker Compose | Optional — runs API, UI, PostgreSQL (OpenSearch/Bedrock via AWS) |
 | PostgreSQL | Required for auth, chat memory, and doc cache via the API |
 
 ### Installation
@@ -230,8 +233,10 @@ pip install uv                  # provides uvx for the MCP server
 # Configure environment
 copy .env.example .env          # Windows
 # cp .env.example .env          # Linux / macOS
-# Edit .env — at minimum set OPENAI_API_KEY
+# Edit .env — set BEDROCK_MODEL_ID, OPENSEARCH_ENDPOINT, DATABASE_URL, AWS credentials
 ```
+
+Set `APP_ENV=development` for local runs without full AWS stack (API starts with warnings for missing services).
 
 ### Environment variables
 
@@ -239,13 +244,14 @@ Copy [`.env.example`](.env.example) to `.env`. See [Configuration](#configuratio
 
 ### Local development setup
 
-**Minimal (agent CLI only — no database, no auth):**
+**Minimal (agent CLI — requires AWS credentials for Bedrock):**
 
 ```powershell
+$env:APP_ENV = "development"
 python -m agents.graph.builder "What are Lambda timeout limits?"
 ```
 
-**Full stack with Docker Compose:**
+**Docker Compose (API + UI + PostgreSQL; set Bedrock/OpenSearch in `.env`):**
 
 ```powershell
 cd infra/docker
@@ -259,7 +265,6 @@ This starts:
 | API | http://localhost:8000 |
 | Streamlit UI | http://localhost:8501 |
 | PostgreSQL | localhost:5432 |
-| Qdrant | http://localhost:6333 |
 
 Register a user via the UI or `POST /auth/register`, then chat through the UI or API.
 
@@ -279,8 +284,8 @@ streamlit run apps/ui/app.py
 ### Running the application
 
 ```powershell
-# Health check
-curl http://localhost:8000/health
+# Readiness check (503 if dependencies down)
+curl http://localhost:8000/health/ready
 
 # Register (requires DATABASE_URL)
 curl -X POST http://localhost:8000/auth/register `
@@ -302,7 +307,7 @@ curl -X POST http://localhost:8000/chat `
 ### Running tests
 
 ```powershell
-# Unit tests (84 tests — no MCP / LLM / DB required)
+# Unit tests (89 tests — no live AWS/MCP required)
 pytest tests/unit/ -v
 
 # With coverage (matches CI)
@@ -346,42 +351,34 @@ docker compose up --build
 
 All settings are loaded from environment variables via `core/config.py` (pydantic-settings). Values in `.env` override defaults.
 
-### Required for local development
+### Required in production (`APP_ENV=production`)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OPENAI_API_KEY` | *(empty)* | OpenAI API key for LLM and embeddings |
-| `OPENAI_MODEL` | `gpt-4o` | Chat model for agent nodes |
+| `APP_ENV` | `production` | Strict startup validation |
+| `BEDROCK_MODEL_ID` | *(required)* | Bedrock chat model for agent nodes |
+| `BEDROCK_EMBED_MODEL_ID` | `amazon.titan-embed-text-v2:0` | Bedrock embedding model |
+| `AWS_REGION` | `us-east-1` | AWS region for Bedrock and OpenSearch |
+| `OPENSEARCH_ENDPOINT` | *(required)* | OpenSearch domain HTTPS URL |
+| `DATABASE_URL` | *(required)* | PostgreSQL async URL |
+| `JWT_SECRET` | — | Must not be default in production |
 | `MCP_SERVER_COMMAND` | `uvx` | Executable to launch the MCP server |
 | `MCP_SERVER_ARGS` | `awslabs.aws-documentation-mcp-server@latest` | MCP server package |
 
-### Optional — enable progressively
+### Optional / tuning
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DATABASE_URL` | *(empty)* | PostgreSQL async URL (`postgresql+asyncpg://…`). Enables auth, cache, memory |
-| `QDRANT_URL` | *(empty)* | Qdrant HTTP endpoint (e.g. `http://localhost:6333`) |
-| `QDRANT_COLLECTION` | `aws_docs` | Qdrant collection name |
-| `OPENSEARCH_ENDPOINT` | *(empty)* | OpenSearch domain URL — overrides Qdrant when set |
+| `APP_ENV` | `production` | Set to `development` for relaxed local startup |
 | `OPENSEARCH_INDEX` | `aws_docs` | OpenSearch index name |
-| `OPENSEARCH_USERNAME` | *(empty)* | OpenSearch fine-grained access user |
-| `OPENSEARCH_PASSWORD` | *(empty)* | OpenSearch password |
-| `JWT_SECRET` | `change-me-in-production` | HS256 signing secret — **change in production** |
+| `OPENSEARCH_USERNAME` | *(empty)* | Basic auth user (if not using IAM) |
+| `OPENSEARCH_PASSWORD` | *(empty)* | Basic auth password |
 | `JWT_ALGORITHM` | `HS256` | JWT algorithm |
 | `JWT_EXPIRE_MINUTES` | `60` | Access token lifetime |
 | `DOC_CACHE_TTL_HOURS` | `24` | Doc cache TTL |
 | `MAX_CONTEXT_MESSAGES` | `10` | Multi-turn history window |
 | `RATE_LIMIT_PER_MINUTE` | `20` | Per-IP rate limit on `/chat` |
-
-### Production (AWS / ECS)
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AWS_REGION` | `us-east-1` | AWS region for Bedrock and OpenSearch |
-| `BEDROCK_MODEL_ID` | *(empty)* | When set, switches LLM from OpenAI to Bedrock |
-| `BEDROCK_EMBED_MODEL_ID` | `amazon.titan-embed-text-v2:0` | Bedrock embedding model |
-
-When `BEDROCK_MODEL_ID` is set, the LLM factory uses Amazon Bedrock instead of OpenAI. When `OPENSEARCH_ENDPOINT` is set, vector search uses OpenSearch instead of Qdrant.
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | *(empty)* | OTLP trace exporter URL |
 
 ### Configuration files
 
@@ -397,10 +394,8 @@ When `BEDROCK_MODEL_ID` is set, the LLM factory uses Amazon Bedrock instead of O
 
 | Secret | Where |
 |--------|-------|
-| `OPENAI_API_KEY` | `.env` (local), GitHub Actions secret (CI), Secrets Manager (ECS) |
-| `JWT_SECRET` | `.env` / Secrets Manager — use a strong random value in production |
+| `JWT_SECRET` | `.env` / Secrets Manager |
 | `DATABASE_URL` | `.env` / Secrets Manager (includes DB password) |
-| `OPENSEARCH_PASSWORD` | `.env` / Secrets Manager |
 | `AWS_ROLE_ARN` | GitHub Actions secret (OIDC deploy role) |
 
 Never commit `.env`, `*accessKeys*.csv`, or `terraform.tfvars` — all are in `.gitignore`.
@@ -411,7 +406,8 @@ Never commit `.env`, `*accessKeys*.csv`, or `terraform.tfvars` — all are in `.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | None | Liveness check; reports MCP connection status |
+| `GET` | `/health` | None | Liveness check |
+| `GET` | `/health/ready` | None | Readiness check (503 if dependencies down) |
 | `POST` | `/auth/register` | None | Create user account (requires PostgreSQL) |
 | `POST` | `/auth/login` | None | Returns access + refresh JWT pair |
 | `POST` | `/auth/refresh` | None | Exchange refresh token for new pair |
@@ -449,7 +445,7 @@ The research agent is a compiled LangGraph `StateGraph` with seven nodes and a c
 6. **Answer Generator** — LLM synthesizes an answer using **only** the retrieved context.
 7. **Citation Formatter** — Attaches source titles and URLs.
 
-LLM provider is selected automatically: OpenAI locally, Amazon Bedrock when `BEDROCK_MODEL_ID` is set.
+LLM and embeddings use Amazon Bedrock exclusively. Vector search uses Amazon OpenSearch.
 
 Detailed retrieval strategy, chunking, indexing, and prompt design: [`docs/ai-rag-strategy.md`](docs/ai-rag-strategy.md)
 
@@ -504,7 +500,7 @@ pytest tests/unit/ -v
 | `ci.yml` | Push / PR to `main` | lint → type-check → test → docker-build |
 | `deploy.yml` | Push to `main` / manual dispatch | test → build-and-push (ECR) → deploy (ECS) |
 
-GitHub secret required for CI tests: `OPENAI_API_KEY`. For deploy: `AWS_ROLE_ARN`.
+GitHub secret required for deploy: `AWS_ROLE_ARN`. CI unit tests use `APP_ENV=development` (no AWS secrets needed).
 
 ---
 
@@ -512,6 +508,7 @@ GitHub secret required for CI tests: `OPENAI_API_KEY`. For deploy: `AWS_ROLE_ARN
 
 ```
 docs/
+├── post-deploy-runbook.md   # Phase 9 checklist: Terraform, Bedrock, GitHub secrets, verification
 ├── system-architecture.md   # Components, data flows, caching, and service boundaries
 ├── api.md                   # Full REST API reference with auth and admin endpoints
 ├── ai-rag-strategy.md       # LangGraph agent, hybrid retrieval, prompts, and indexing
@@ -520,28 +517,50 @@ docs/
 
 | Document | Description |
 |----------|-------------|
+| [`docs/post-deploy-runbook.md`](docs/post-deploy-runbook.md) | Step-by-step AWS deploy after Phase 9 — Terraform apply, Bedrock, remove `OPENAI_API_KEY`, health checks |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | End-to-end system design — API layer, agent, data stores, and MCP integration |
 | [`docs/api.md`](docs/api.md) | Complete API contracts, authentication flows, rate limits, and error handling |
 | [`docs/ai-rag-strategy.md`](docs/ai-rag-strategy.md) | Agent graph topology, retrieval pipeline (vector + BM25 + RRF), and LLM provider switching |
 | [`docs/deployment-strategy.md`](docs/deployment-strategy.md) | Local Docker setup, AWS Terraform provisioning, and GitHub Actions deployment |
+| [`infra/terraform/README.md`](infra/terraform/README.md) | Terraform bootstrap, apply, and Bedrock prerequisites |
 | [`infra/terraform/README.md`](infra/terraform/README.md) | Step-by-step AWS infrastructure bootstrap and cost estimates |
 | [`AGENT.md`](AGENT.md) | Phase-by-phase development history and implementation checklist |
 
 ---
 
-## Future Improvements
+## Post-Deploy Checklist (AWS)
 
-Based on the current codebase, these are the highest-value next steps:
+After merging Phase 9, complete [`docs/post-deploy-runbook.md`](docs/post-deploy-runbook.md):
+
+1. **`terraform apply`** — applies `APP_ENV=production`, ALB `/health/ready`, ECS health check
+2. **Enable Bedrock models** in AWS Console (Claude + Titan Embed v2)
+3. **`python scripts/check_aws_access.py`** — confirm Bedrock invoke works
+4. **Deploy images** to ECR and force ECS rolling update
+5. **Delete `OPENAI_API_KEY`** from GitHub → Settings → Secrets → Actions (obsolete)
+6. **`curl http://<alb>/health/ready`** — must return 200 with all dependencies true
+7. **Register user**, run `POST /admin/sync` and `POST /admin/reindex`
+
+### Next steps (recommended)
+
+| Priority | Task |
+|----------|------|
+| High | Enable HTTPS on ALB (`enable_https` + ACM certificate) |
+| High | Promote first user to admin; run sync + reindex to populate OpenSearch |
+| Medium | Nightly AWS integration smoke tests via GitHub Actions |
+| Medium | Set `OTEL_EXPORTER_OTLP_ENDPOINT` for distributed tracing |
+| Low | Custom domain (Route 53) and WAF on ALB |
+
+---
+
+## Future Improvements
 
 | Area | Recommendation |
 |------|----------------|
-| **Observability** | Add OpenTelemetry tracing and Prometheus metrics (referenced in `AGENT.md` but not yet implemented) |
-| **Database migrations** | Replace `create_all()` with Alembic migrations (Alembic is in `requirements.txt` but unused) |
-| **Integration tests** | Add `tests/integration/` for MCP, PostgreSQL, and Qdrant (directories planned in `AGENT.md`) |
-| **Dev ergonomics** | Optional auth bypass flag for local API development without PostgreSQL |
-| **OpenSearch sync** | Extend sync pipeline indexing to OpenSearch (currently Qdrant-focused in scheduler) |
-| **Health checks** | Expand `/health` to report DB, vector store, and scheduler status |
-| **License** | Add a root `LICENSE` file for open-source distribution |
+| **HTTPS** | Enable ACM certificate on ALB in Terraform |
+| **Integration tests** | Nightly GitHub Actions workflow with AWS OIDC |
+| **Observability** | ADOT sidecar or OTLP exporter to CloudWatch |
+| **Admin bootstrap** | Migration or init script for first admin user |
+| **License** | Add root `LICENSE` file |
 
 ---
 

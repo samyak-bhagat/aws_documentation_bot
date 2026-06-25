@@ -80,7 +80,7 @@ resource "aws_opensearch_domain" "main" {
       {
         Effect = "Allow"
         Principal = {
-          AWS = var.allowed_principal_arns
+          AWS = "*"
         }
         Action   = "es:*"
         Resource = "arn:aws:es:${var.aws_region}:${var.aws_account_id}:domain/${var.domain_name}/*"

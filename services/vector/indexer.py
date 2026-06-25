@@ -1,4 +1,4 @@
-"""Vector indexer — upsert embedded chunks into Qdrant or OpenSearch."""
+"""Vector indexer — upsert embedded chunks into Amazon OpenSearch."""
 
 from __future__ import annotations
 
@@ -48,20 +48,6 @@ async def _upsert_opensearch(points: list[dict]) -> None:
         await asyncio.to_thread(client.bulk, body=body, refresh=False)
 
 
-async def _upsert_qdrant(points: list) -> None:
-    from qdrant_client.http.models import PointStruct
-
-    from services.vector.client import COLLECTION_NAME, get_client
-
-    client = get_client()
-    structs = [
-        PointStruct(id=p["id"], vector=p["vector"], payload=p["payload"]) for p in points
-    ]
-    for i in range(0, len(structs), _UPSERT_BATCH):
-        batch = structs[i : i + _UPSERT_BATCH]
-        await client.upsert(collection_name=COLLECTION_NAME, points=batch)
-
-
 async def index_document(
     url: str,
     title: str,
@@ -85,45 +71,25 @@ async def index_document(
     texts = [c.text for c in chunks]
     vectors = await embed_texts(texts)
 
-    if settings.use_opensearch:
-        os_points: list[dict] = []
-        for chunk, vector in zip(chunks, vectors, strict=True):
-            doc_id = _chunk_id(url, chunk.chunk_index)
-            os_points.append(
-                {
-                    "id": doc_id,
-                    "source": {
-                        "url": chunk.url,
-                        "title": chunk.title,
-                        "section": chunk.section,
-                        "service_name": chunk.service_name,
-                        "chunk_text": chunk.text,
-                        "hash": chunk.hash,
-                        "chunk_index": chunk.chunk_index,
-                        "embedding": vector,
-                    },
-                }
-            )
-        await _upsert_opensearch(os_points)
-    else:
-        qdrant_points = []
-        for chunk, vector in zip(chunks, vectors, strict=True):
-            qdrant_points.append(
-                {
-                    "id": _chunk_id(url, chunk.chunk_index),
-                    "vector": vector,
-                    "payload": {
-                        "url": chunk.url,
-                        "title": chunk.title,
-                        "section": chunk.section,
-                        "service_name": chunk.service_name,
-                        "chunk_text": chunk.text,
-                        "hash": chunk.hash,
-                        "chunk_index": chunk.chunk_index,
-                    },
-                }
-            )
-        await _upsert_qdrant(qdrant_points)
+    os_points: list[dict] = []
+    for chunk, vector in zip(chunks, vectors, strict=True):
+        doc_id = _chunk_id(url, chunk.chunk_index)
+        os_points.append(
+            {
+                "id": doc_id,
+                "source": {
+                    "url": chunk.url,
+                    "title": chunk.title,
+                    "section": chunk.section,
+                    "service_name": chunk.service_name,
+                    "chunk_text": chunk.text,
+                    "hash": chunk.hash,
+                    "chunk_index": chunk.chunk_index,
+                    "embedding": vector,
+                },
+            }
+        )
+    await _upsert_opensearch(os_points)
 
     logger.info("Indexed document", extra={"url": url, "chunks": len(chunks)})
     return len(chunks)

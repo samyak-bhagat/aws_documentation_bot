@@ -61,14 +61,17 @@ Exceeded limits return **429 Too Many Requests**.
 
 ### `GET /health`
 
-Liveness check. Does not require authentication.
+Liveness check. Does not require authentication. Always returns `200` when the process is running.
 
 **Response** `200 OK`:
 
 ```json
 {
   "status": "ok",
-  "mcp_connected": true
+  "mcp_connected": true,
+  "database_connected": true,
+  "vector_store_connected": true,
+  "scheduler_running": true
 }
 ```
 
@@ -76,8 +79,17 @@ Liveness check. Does not require authentication.
 |-------|------|-------------|
 | `status` | string | Always `"ok"` when the server is running |
 | `mcp_connected` | boolean | Whether the MCP server session is active |
+| `database_connected` | boolean | Whether PostgreSQL is connected |
+| `vector_store_connected` | boolean | Whether OpenSearch is connected |
+| `scheduler_running` | boolean | Whether the sync scheduler is running |
 
-Schema: `apps/api/schemas.py` → `HealthResponse`
+---
+
+### `GET /health/ready`
+
+Readiness check for load balancers and ECS. Returns `503` if MCP, PostgreSQL, or OpenSearch is unavailable.
+
+**Response** `200 OK` or `503 Service Unavailable` — same body shape as `/health`.
 
 ---
 

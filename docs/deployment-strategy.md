@@ -17,11 +17,25 @@ All commands and configuration values are taken from the repository implementati
 
 ---
 
+## Post-Deploy Runbook (start here after Phase 9)
+
+Follow [`post-deploy-runbook.md`](post-deploy-runbook.md) for the complete checklist:
+
+1. `terraform apply` — picks up `APP_ENV=production`, ALB `/health/ready`, ECS container health check
+2. Enable Bedrock models in AWS Console
+3. `python scripts/check_aws_access.py` — verify Bedrock invoke
+4. Build/push images and force ECS deployment
+5. Remove obsolete GitHub secret `OPENAI_API_KEY`
+6. Verify `GET /health/ready` returns 200
+7. Register user, run `/admin/sync` and `/admin/reindex`
+
+---
+
 ## Local Deployment
 
-### Minimal (API + MCP only)
+### Minimal (CLI agent)
 
-**Requirements:** Python 3.12, OpenAI API key, `uv` for MCP server.
+**Requirements:** Python 3.12, AWS credentials with Bedrock access, `uv` for MCP.
 
 ```powershell
 py -3.12 -m venv .venv
@@ -30,25 +44,12 @@ pip install -r requirements.txt
 pip install uv
 
 copy .env.example .env
-# Set OPENAI_API_KEY in .env
+# Set BEDROCK_MODEL_ID, AWS credentials; APP_ENV=development
 
-uvicorn apps.api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-**Limitations without `DATABASE_URL`:**
-
-- Auth endpoints return 503
-- `/chat` requires JWT (cannot authenticate without DB)
-- No chat memory or doc cache persistence
-- No vector search (unless `QDRANT_URL` set with external Qdrant)
-
-**Workaround for agent testing:** Use the CLI instead:
-
-```powershell
 python -m agents.graph.builder "What are Lambda timeout limits?"
 ```
 
-### Full Stack (Docker Compose)
+### Docker Compose (API + UI + PostgreSQL)
 
 **File:** `infra/docker/docker-compose.yml`
 
@@ -57,30 +58,13 @@ cd infra/docker
 docker compose up --build
 ```
 
-**Services started:**
+| Service | Port | Purpose |
+|---------|------|---------|
+| `api` | 8000 | FastAPI + MCP |
+| `ui` | 8501 | Streamlit UI |
+| `postgres` | 5432 | Doc cache, auth, chat memory |
 
-| Service | Image / Build | Port | Purpose |
-|---------|---------------|------|---------|
-| `api` | `Dockerfile.api` | 8000 | FastAPI + MCP (uvx pre-cached at build) |
-| `ui` | `Dockerfile.ui` | 8501 | Streamlit chat UI |
-| `postgres` | `postgres:16-alpine` | 5432 | Document cache, chat memory, users |
-| `qdrant` | `qdrant/qdrant:latest` | 6333 | Vector search index |
-
-**Environment overrides in compose:**
-
-```yaml
-DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/aws_docs
-QDRANT_URL: http://qdrant:6333
-API_URL: http://api:8000  # UI service only
-```
-
-Uses `.env` from project root via `env_file: ../../.env`.
-
-**First-time setup after compose is running:**
-
-1. Open http://localhost:8501
-2. Register a user account
-3. Ask a question — first queries use MCP; subsequent queries benefit from cache
+Compose sets `APP_ENV=development`. Bedrock and OpenSearch must still be configured in `.env` for full functionality.
 
 ---
 
@@ -270,7 +254,14 @@ flowchart LR
 | `test` | 3.12 | `pytest tests/unit/ -v --cov=. --cov-report=term-missing` |
 | `docker-build` | — | `docker build -f infra/docker/Dockerfile.api` |
 
-**Secrets:** `OPENAI_API_KEY` (for tests that need it)
+**Environment (CI test job):** `APP_ENV=development` — no AWS or OpenAI secrets required.
+
+**GitHub Actions secrets:**
+
+| Secret | Required? | Purpose |
+|--------|-----------|---------|
+| `AWS_ROLE_ARN` | Deploy only | OIDC role for ECR push + ECS deploy |
+| ~~`OPENAI_API_KEY`~~ | **Remove** | Obsolete after Phase 9 — delete from repo secrets |
 
 ### Deploy (`.github/workflows/deploy.yml`)
 
@@ -305,8 +296,9 @@ ECS_UI_SERVICE: aws-docs-bot-dev-ui
 
 | Secret | Purpose |
 |--------|---------|
-| `OPENAI_API_KEY` | CI test execution |
 | `AWS_ROLE_ARN` | OIDC role for ECR push and ECS deploy |
+
+Remove `OPENAI_API_KEY` if still present — workflows no longer reference it.
 
 **Enable OIDC deploy:**
 
@@ -318,15 +310,13 @@ ECS_UI_SERVICE: aws-docs-bot-dev-ui
 
 ## Environment Configuration Matrix
 
-| Variable | Local minimal | Docker Compose | AWS ECS |
-|----------|---------------|----------------|---------|
-| `OPENAI_API_KEY` | Required | Required | Not set (uses Bedrock) |
-| `BEDROCK_MODEL_ID` | — | — | Required |
-| `DATABASE_URL` | Optional | Auto-set by compose | From Secrets Manager |
-| `QDRANT_URL` | Optional | Auto-set by compose | Not set (uses OpenSearch) |
-| `OPENSEARCH_ENDPOINT` | — | — | From Terraform |
-| `JWT_SECRET` | Default (insecure) | From `.env` | From Secrets Manager |
-| `MCP_SERVER_COMMAND` | `uvx` | `uvx` | `uvx` (pre-cached in image) |
+| Variable | Local (`APP_ENV=development`) | Docker Compose | AWS ECS (`APP_ENV=production`) |
+|----------|-------------------------------|----------------|--------------------------------|
+| `APP_ENV` | `development` | `development` | `production` (set in task def) |
+| `BEDROCK_MODEL_ID` | Required for LLM | From `.env` | From Terraform env |
+| `OPENSEARCH_ENDPOINT` | Required for search | From `.env` | From Terraform env |
+| `DATABASE_URL` | Optional (warn) | Auto-set | Secrets Manager |
+| `JWT_SECRET` | Default OK locally | From `.env` | Secrets Manager |
 
 ---
 
@@ -392,13 +382,15 @@ Set `enable_nat_gateway = false` to reduce cost (tasks run in public subnets —
 | `503 Database not available` | `DATABASE_URL` not set or PostgreSQL down | Start postgres service or set connection string |
 | `401 Authentication required` | Missing Bearer token on `/chat` | Login first, include `Authorization` header |
 | Hybrid search not used | Vector index empty | Run `/admin/sync` then `/admin/reindex` |
-| ECS tasks unhealthy | Image not pushed or env vars missing | Push to ECR, verify Secrets Manager values |
+| ECS tasks unhealthy | ALB `/health/ready` returns 503 | Check CloudWatch; enable Bedrock; verify RDS/OpenSearch |
+| `/health/ready` 503 | MCP, RDS, or OpenSearch down | See CloudWatch log group `/ecs/aws-docs-bot-dev/api` |
 | Bedrock errors | Model access not enabled | Enable models in Bedrock console for deployment region |
 
 ---
 
 ## Related Documentation
 
+- [Post-Deploy Runbook](post-deploy-runbook.md)
 - [System Architecture](system-architecture.md)
 - [API Documentation](api.md)
 - [AI / RAG Strategy](ai-rag-strategy.md)

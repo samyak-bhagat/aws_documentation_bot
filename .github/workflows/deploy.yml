@@ -21,6 +21,8 @@ jobs:
   test:
     name: Lint & Test
     runs-on: ubuntu-latest
+    env:
+      APP_ENV: development
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +40,6 @@ jobs:
           ruff format --check .
 
       - name: Unit tests
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: pytest tests/unit/ -v
 
   build-and-push:

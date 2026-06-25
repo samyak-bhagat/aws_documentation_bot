@@ -61,13 +61,21 @@ class TestCitation:
 
 class TestHealthResponse:
     def test_healthy(self):
-        h = HealthResponse(status="ok", mcp_connected=True)
+        h = HealthResponse(
+            status="ok",
+            mcp_connected=True,
+            database_connected=True,
+            vector_store_connected=True,
+            scheduler_running=True,
+        )
         assert h.status == "ok"
         assert h.mcp_connected is True
+        assert h.database_connected is True
 
     def test_unhealthy(self):
         h = HealthResponse(status="ok", mcp_connected=False)
         assert h.mcp_connected is False
+        assert h.database_connected is False
 
 
 class TestNewSessionId:

@@ -105,6 +105,10 @@ resource "aws_secretsmanager_secret" "jwt" {
   name = "${local.name_prefix}/jwt"
 }
 
+resource "aws_secretsmanager_secret" "opensearch" {
+  name = "${local.name_prefix}/opensearch"
+}
+
 resource "aws_secretsmanager_secret_version" "jwt" {
   secret_id = aws_secretsmanager_secret.jwt.id
   secret_string = jsonencode({
@@ -118,7 +122,7 @@ module "iam" {
   source = "../../modules/iam"
 
   name_prefix        = local.name_prefix
-  secret_arns        = [aws_secretsmanager_secret.db.arn, aws_secretsmanager_secret.jwt.arn]
+  secret_arns        = [aws_secretsmanager_secret.db.arn, aws_secretsmanager_secret.jwt.arn, aws_secretsmanager_secret.opensearch.arn]
   enable_github_oidc = var.enable_github_oidc
   github_repo        = var.github_repo
 }
@@ -171,6 +175,16 @@ module "opensearch" {
   master_user_password   = random_password.opensearch.result
   instance_type          = var.opensearch_instance_type
   instance_count         = var.opensearch_instance_count
+}
+
+resource "aws_secretsmanager_secret_version" "opensearch" {
+  secret_id = aws_secretsmanager_secret.opensearch.id
+  secret_string = jsonencode({
+    username = "admin"
+    password = random_password.opensearch.result
+  })
+
+  depends_on = [module.opensearch]
 }
 
 resource "aws_iam_role_policy" "ecs_task_opensearch" {
@@ -246,6 +260,7 @@ module "ecs" {
 
   db_secret_arn          = aws_secretsmanager_secret.db.arn
   jwt_secret_arn         = aws_secretsmanager_secret.jwt.arn
+  opensearch_secret_arn  = aws_secretsmanager_secret.opensearch.arn
   opensearch_endpoint    = "https://${module.opensearch.endpoint}"
   opensearch_index       = var.opensearch_index
   bedrock_model_id       = var.bedrock_model_id

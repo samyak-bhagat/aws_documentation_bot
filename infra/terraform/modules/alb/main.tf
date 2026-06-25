@@ -55,7 +55,7 @@ resource "aws_lb_target_group" "api" {
 
   health_check {
     enabled             = true
-    path                = "/health"
+    path                = "/health/ready"
     healthy_threshold   = 2
     unhealthy_threshold = 3
     timeout             = 5
@@ -112,7 +112,7 @@ resource "aws_lb_listener_rule" "api_primary" {
 
   condition {
     path_pattern {
-      values = ["/chat", "/health", "/openapi.json", "/redoc", "/docs"]
+      values = ["/chat", "/health*", "/openapi.json", "/redoc", "/docs"]
     }
   }
 }
