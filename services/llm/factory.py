@@ -14,7 +14,7 @@ def get_chat_llm() -> BaseChatModel:
         raise RuntimeError("BEDROCK_MODEL_ID is not configured")
 
     return ChatBedrock(
-        model_id=settings.bedrock_model_id,
-        region_name=settings.aws_region,
+        model=settings.bedrock_model_id,
+        region=settings.aws_region,
         model_kwargs={"temperature": 0},
     )
