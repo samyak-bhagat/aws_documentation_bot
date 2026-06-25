@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         logger.info("MCP connected — agent ready")
 
         # Start daily knowledge sync scheduler
-        app.state.scheduler = start_scheduler(mcp_tools)
+        app.state.scheduler = start_scheduler(mcp_tools, db_available=app.state.db_available)
     except Exception as exc:
         logger.error("MCP connection failed", extra={"error": str(exc)})
         app.state.graph = None

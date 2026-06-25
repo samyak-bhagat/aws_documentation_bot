@@ -42,7 +42,7 @@ class SyncResult:
     errors: int = 0
 
 
-async def run_sync(mcp_tools: AWSDocsMCPTools) -> SyncResult:
+async def run_sync(mcp_tools: AWSDocsMCPTools, db_available: bool = True) -> SyncResult:
     """Execute one full sync cycle. Safe to call from the scheduler or an API endpoint."""
     result = SyncResult()
 
@@ -62,9 +62,13 @@ async def run_sync(mcp_tools: AWSDocsMCPTools) -> SyncResult:
         return result
 
     # ── Step 2–6: Search, read, hash, upsert per service ─────────────
-    from core.database import _session_factory  # noqa: PLC0415
-    from services.cache.models import DocCache
+    from services.cache.models import DocCache  # noqa: PLC0415
     from services.cache.repository import DocCacheRepository
+
+    if db_available:
+        from core.database import _session_factory  # noqa: PLC0415
+    else:
+        _session_factory = None
 
     for update in updates:
         logger.info("Syncing service", extra={"service": update.service_name})
@@ -128,12 +132,12 @@ async def run_sync(mcp_tools: AWSDocsMCPTools) -> SyncResult:
 _scheduler: AsyncIOScheduler | None = None
 
 
-def create_scheduler(mcp_tools: AWSDocsMCPTools) -> AsyncIOScheduler:
+def create_scheduler(mcp_tools: AWSDocsMCPTools, db_available: bool = True) -> AsyncIOScheduler:
     """Build and return a configured AsyncIOScheduler (not yet started)."""
 
     async def _job() -> None:
         logger.info("Scheduled sync starting")
-        await run_sync(mcp_tools)
+        await run_sync(mcp_tools, db_available=db_available)
 
     scheduler = AsyncIOScheduler()
     scheduler.add_job(
@@ -147,10 +151,10 @@ def create_scheduler(mcp_tools: AWSDocsMCPTools) -> AsyncIOScheduler:
     return scheduler
 
 
-def start_scheduler(mcp_tools: AWSDocsMCPTools) -> AsyncIOScheduler:
+def start_scheduler(mcp_tools: AWSDocsMCPTools, db_available: bool = True) -> AsyncIOScheduler:
     """Create, start, and return the scheduler. Store globally for shutdown."""
     global _scheduler
-    _scheduler = create_scheduler(mcp_tools)
+    _scheduler = create_scheduler(mcp_tools, db_available=db_available)
     _scheduler.start()
     logger.info("Sync scheduler started — next run at 02:00 UTC daily")
     return _scheduler

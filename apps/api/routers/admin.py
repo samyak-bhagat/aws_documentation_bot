@@ -28,8 +28,9 @@ async def trigger_sync(request: Request) -> SyncResponse:
     if mcp_tools is None:
         raise HTTPException(status_code=503, detail="MCP not connected — cannot run sync.")
 
-    logger.info("Manual sync triggered via /admin/sync")
-    result = await run_sync(mcp_tools)
+    db_available = getattr(request.app.state, "db_available", False)
+    logger.info("Manual sync triggered via /admin/sync", extra={"db_available": db_available})
+    result = await run_sync(mcp_tools, db_available=db_available)
 
     return SyncResponse(
         status="ok",
