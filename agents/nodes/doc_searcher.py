@@ -19,17 +19,18 @@ def make_doc_searcher(mcp_tools: AWSDocsMCPTools):
 
     async def node(state: AgentState) -> dict:
         query = state["optimized_query"]
-        service = state.get("aws_service", "").lower() or None
         logger.info("Searching docs", extra={"query": query})
 
-        # ── Try hybrid search if Qdrant is available ──────────────────
+        # ── Try hybrid search if Qdrant has any indexed docs ─────────────
+        # Check without service filter — semantic search handles relevance.
+        # Service name is passed as a soft hint, not a hard filter.
         try:
             from services.vector.client import collection_has_docs
             from services.vector.retriever import hybrid_search
 
-            has_docs = await collection_has_docs(service_name=service)
+            has_docs = await collection_has_docs()  # no service filter
             if has_docs:
-                results = await hybrid_search(query, service_name=service, top_n=_SEARCH_LIMIT)
+                results = await hybrid_search(query, service_name=None, top_n=_SEARCH_LIMIT)
                 if results:
                     logger.info("Hybrid search used", extra={"result_count": len(results)})
                     return {"search_results": [r.model_dump() for r in results]}
