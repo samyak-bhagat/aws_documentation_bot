@@ -24,7 +24,7 @@ from core.logging import get_logger
 from services.mcp.client import MCPClient
 from services.mcp.tools import AWSDocsMCPTools
 from services.sync.scheduler import start_scheduler, stop_scheduler
-from services.vector.client import close_qdrant, init_qdrant
+from services.vector.store import close_vector_store, init_vector_store
 
 logger = get_logger(__name__)
 
@@ -50,15 +50,17 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             )
 
     # ── Qdrant (optional) ────────────────────────────────────────────
-    app.state.qdrant_available = False
-    if settings.qdrant_url:
+    app.state.vector_available = False
+    if settings.vector_search_enabled:
         try:
-            await init_qdrant()
-            app.state.qdrant_available = True
-            logger.info("Qdrant connected")
+            await init_vector_store()
+            app.state.vector_available = True
+            backend = "opensearch" if settings.use_opensearch else "qdrant"
+            logger.info("Vector store connected", extra={"backend": backend})
         except Exception as exc:
             logger.warning(
-                "Qdrant unavailable — running without vector search", extra={"error": str(exc)}
+                "Vector store unavailable — running without vector search",
+                extra={"error": str(exc)},
             )
 
     # ── MCP server ────────────────────────────────────────────────────
@@ -93,8 +95,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         await close_db()
 
-    if app.state.qdrant_available:
-        await close_qdrant()
+    if app.state.vector_available:
+        await close_vector_store()
 
 
 def create_app() -> FastAPI:

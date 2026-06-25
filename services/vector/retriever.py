@@ -1,28 +1,23 @@
-"""Hybrid retriever — Phase 7.
+"""Hybrid retriever — vector + BM25 + RRF.
 
-Combines:
-  1. Vector search (Qdrant)       — semantic similarity
-  2. BM25 keyword search          — exact term matching
-  3. Reciprocal Rank Fusion (RRF) — merge rankings
-  4. Cross-encoder reranking      — final precision pass (optional, uses OpenAI)
+Backends: Qdrant (local) or Amazon OpenSearch (AWS).
 """
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 
-from qdrant_client.http.models import FieldCondition, Filter, MatchValue
-
+from core.config import settings
 from core.logging import get_logger
 from services.mcp.schemas import SearchResult
-from services.vector.client import COLLECTION_NAME, get_client
 from services.vector.embedder import embed_query
 
 logger = get_logger(__name__)
 
 _VECTOR_TOP_K = 20
 _BM25_TOP_K = 20
-_RRF_K = 60  # standard RRF constant
+_RRF_K = 60
 _FINAL_TOP_N = 5
 
 
@@ -36,15 +31,99 @@ class RankedChunk:
     score: float
 
 
-# ── Vector Search ─────────────────────────────────────────────────────────────
+# ── OpenSearch ────────────────────────────────────────────────────────────────
 
 
-async def vector_search(
+async def _opensearch_vector_search(
     query: str,
     service_name: str | None = None,
     top_k: int = _VECTOR_TOP_K,
 ) -> list[RankedChunk]:
-    """Semantic search via Qdrant."""
+    from services.vector.opensearch_client import get_client
+
+    client = get_client()
+    index = settings.opensearch_index
+    query_vector = await embed_query(query)
+
+    knn_clause: dict = {"embedding": {"vector": query_vector, "k": top_k}}
+    if service_name:
+        body = {
+            "size": top_k,
+            "query": {
+                "bool": {
+                    "filter": [{"term": {"service_name": service_name}}],
+                    "must": [{"knn": knn_clause}],
+                }
+            },
+        }
+    else:
+        body = {"size": top_k, "query": {"knn": knn_clause}}
+
+    result = await asyncio.to_thread(client.search, index=index, body=body)
+    chunks: list[RankedChunk] = []
+    for hit in result.get("hits", {}).get("hits", []):
+        src = hit.get("_source", {})
+        chunks.append(
+            RankedChunk(
+                url=src.get("url", ""),
+                title=src.get("title", ""),
+                section=src.get("section", ""),
+                service_name=src.get("service_name", ""),
+                chunk_text=src.get("chunk_text", ""),
+                score=float(hit.get("_score", 0)),
+            )
+        )
+    return chunks
+
+
+async def _opensearch_bm25_search(
+    query: str,
+    service_name: str | None = None,
+    top_k: int = _BM25_TOP_K,
+) -> list[RankedChunk]:
+    from services.vector.opensearch_client import get_client
+
+    client = get_client()
+    index = settings.opensearch_index
+
+    must: list[dict] = [{"match": {"chunk_text": query}}]
+    filters: list[dict] = []
+    if service_name:
+        filters.append({"term": {"service_name": service_name}})
+
+    body = {
+        "size": top_k,
+        "query": {"bool": {"must": must, "filter": filters}},
+    }
+    result = await asyncio.to_thread(client.search, index=index, body=body)
+    chunks: list[RankedChunk] = []
+    for hit in result.get("hits", {}).get("hits", []):
+        src = hit.get("_source", {})
+        chunks.append(
+            RankedChunk(
+                url=src.get("url", ""),
+                title=src.get("title", ""),
+                section=src.get("section", ""),
+                service_name=src.get("service_name", ""),
+                chunk_text=src.get("chunk_text", ""),
+                score=float(hit.get("_score", 0)),
+            )
+        )
+    return chunks
+
+
+# ── Qdrant ────────────────────────────────────────────────────────────────────
+
+
+async def _qdrant_vector_search(
+    query: str,
+    service_name: str | None = None,
+    top_k: int = _VECTOR_TOP_K,
+) -> list[RankedChunk]:
+    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+
+    from services.vector.client import COLLECTION_NAME, get_client
+
     client = get_client()
     query_vector = await embed_query(query)
 
@@ -78,16 +157,15 @@ async def vector_search(
     return chunks
 
 
-# ── BM25 Search ───────────────────────────────────────────────────────────────
-
-
-async def bm25_search(
+async def _qdrant_bm25_search(
     query: str,
     service_name: str | None = None,
     top_k: int = _BM25_TOP_K,
 ) -> list[RankedChunk]:
-    """BM25 keyword search over Qdrant payload text (scroll + rank locally)."""
+    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
     from rank_bm25 import BM25Okapi
+
+    from services.vector.client import COLLECTION_NAME, get_client
 
     client = get_client()
     search_filter = None
@@ -96,7 +174,6 @@ async def bm25_search(
             must=[FieldCondition(key="service_name", match=MatchValue(value=service_name))]
         )
 
-    # Scroll up to 2000 records for BM25 corpus
     records, _ = await client.scroll(
         collection_name=COLLECTION_NAME,
         scroll_filter=search_filter,
@@ -134,7 +211,27 @@ async def bm25_search(
     return chunks
 
 
-# ── Reciprocal Rank Fusion ────────────────────────────────────────────────────
+# ── Public vector / BM25 API ──────────────────────────────────────────────────
+
+
+async def vector_search(
+    query: str,
+    service_name: str | None = None,
+    top_k: int = _VECTOR_TOP_K,
+) -> list[RankedChunk]:
+    if settings.use_opensearch:
+        return await _opensearch_vector_search(query, service_name, top_k)
+    return await _qdrant_vector_search(query, service_name, top_k)
+
+
+async def bm25_search(
+    query: str,
+    service_name: str | None = None,
+    top_k: int = _BM25_TOP_K,
+) -> list[RankedChunk]:
+    if settings.use_opensearch:
+        return await _opensearch_bm25_search(query, service_name, top_k)
+    return await _qdrant_bm25_search(query, service_name, top_k)
 
 
 def reciprocal_rank_fusion(
@@ -158,9 +255,6 @@ def reciprocal_rank_fusion(
         chunk.score = fused[key]
         result.append(chunk)
     return result
-
-
-# ── Public API ────────────────────────────────────────────────────────────────
 
 
 async def hybrid_search(

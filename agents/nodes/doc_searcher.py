@@ -25,8 +25,8 @@ def make_doc_searcher(mcp_tools: AWSDocsMCPTools):
         # Check without service filter — semantic search handles relevance.
         # Service name is passed as a soft hint, not a hard filter.
         try:
-            from services.vector.client import collection_has_docs
             from services.vector.retriever import hybrid_search
+            from services.vector.store import collection_has_docs
 
             has_docs = await collection_has_docs()  # no service filter
             if has_docs:

@@ -59,8 +59,8 @@ async def trigger_reindex(
     """Re-index all cached docs from PostgreSQL into Qdrant."""
     if not getattr(request.app.state, "db_available", False):
         raise HTTPException(status_code=503, detail="PostgreSQL not available.")
-    if not getattr(request.app.state, "qdrant_available", False):
-        raise HTTPException(status_code=503, detail="Qdrant not available.")
+    if not getattr(request.app.state, "vector_available", False):
+        raise HTTPException(status_code=503, detail="Vector store not available.")
 
     from core.database import _session_factory
     from services.vector.indexer import index_all_cached

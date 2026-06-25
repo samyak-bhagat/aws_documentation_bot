@@ -22,9 +22,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # OpenAI
+    # OpenAI (local dev)
     openai_api_key: str = ""
     openai_model: str = "gpt-4o"
+
+    # AWS / Bedrock (production)
+    aws_region: str = "us-east-1"
+    bedrock_model_id: str = ""
+    bedrock_embed_model_id: str = "amazon.titan-embed-text-v2:0"
 
     # MCP Server
     mcp_server_command: str = "uvx"
@@ -33,9 +38,15 @@ class Settings(BaseSettings):
     # PostgreSQL (Phase 5+)
     database_url: str = ""
 
-    # Qdrant (Phase 7+)
-    qdrant_url: str = "http://localhost:6333"
+    # Qdrant (local dev)
+    qdrant_url: str = ""
     qdrant_collection: str = "aws_docs"
+
+    # OpenSearch (AWS)
+    opensearch_endpoint: str = ""
+    opensearch_index: str = "aws_docs"
+    opensearch_username: str = ""
+    opensearch_password: str = ""
 
     # Auth (Phase 8+)
     jwt_secret: str = "change-me-in-production"
@@ -48,6 +59,22 @@ class Settings(BaseSettings):
 
     # Rate limiting (Phase 8+)
     rate_limit_per_minute: int = 20
+
+    @property
+    def use_bedrock(self) -> bool:
+        return bool(self.bedrock_model_id)
+
+    @property
+    def use_opensearch(self) -> bool:
+        return bool(self.opensearch_endpoint)
+
+    @property
+    def use_qdrant(self) -> bool:
+        return bool(self.qdrant_url) and not self.use_opensearch
+
+    @property
+    def vector_search_enabled(self) -> bool:
+        return self.use_opensearch or self.use_qdrant
 
     @property
     def mcp_server_command_resolved(self) -> str:

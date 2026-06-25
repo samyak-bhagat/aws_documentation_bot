@@ -5,6 +5,16 @@ env/
 
 # Secrets — NEVER commit
 .env
+*accessKeys*.csv
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+!terraform.tfvars.example
+tfplan
+apply.log
 
 # Python bytecode
 __pycache__/
