@@ -1,4 +1,8 @@
-"""POST /admin/sync — manually trigger the knowledge sync pipeline."""
+"""Admin endpoints — Phase 6/7.
+
+POST /admin/sync     — trigger knowledge sync pipeline
+POST /admin/reindex  — (re)index all doc_cache entries into Qdrant
+"""
 
 import dataclasses
 
@@ -21,6 +25,13 @@ class SyncResponse(BaseModel):
     errors: int
 
 
+class ReindexResponse(BaseModel):
+    status: str
+    total: int
+    chunks: int
+    errors: int
+
+
 @router.post("/sync", response_model=SyncResponse)
 async def trigger_sync(request: Request) -> SyncResponse:
     """Manually trigger the knowledge sync pipeline (no auth required in dev)."""
@@ -36,3 +47,24 @@ async def trigger_sync(request: Request) -> SyncResponse:
         status="ok",
         **dataclasses.asdict(result),
     )
+
+
+@router.post("/reindex", response_model=ReindexResponse)
+async def trigger_reindex(request: Request) -> ReindexResponse:
+    """Re-index all cached docs from PostgreSQL into Qdrant."""
+    if not getattr(request.app.state, "db_available", False):
+        raise HTTPException(status_code=503, detail="PostgreSQL not available.")
+    if not getattr(request.app.state, "qdrant_available", False):
+        raise HTTPException(status_code=503, detail="Qdrant not available.")
+
+    from core.database import _session_factory
+    from services.vector.indexer import index_all_cached
+
+    if _session_factory is None:
+        raise HTTPException(status_code=503, detail="DB session factory not ready.")
+
+    logger.info("Manual reindex triggered via /admin/reindex")
+    async with _session_factory() as session:
+        stats = await index_all_cached(session)
+
+    return ReindexResponse(status="ok", **stats)

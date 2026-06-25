@@ -20,6 +20,7 @@ from core.logging import get_logger
 from services.mcp.client import MCPClient
 from services.mcp.tools import AWSDocsMCPTools
 from services.sync.scheduler import start_scheduler, stop_scheduler
+from services.vector.client import close_qdrant, init_qdrant
 
 logger = get_logger(__name__)
 
@@ -39,6 +40,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as exc:
             logger.warning(
                 "PostgreSQL unavailable — running without DB cache", extra={"error": str(exc)}
+            )
+
+    # ── Qdrant (optional) ────────────────────────────────────────────
+    app.state.qdrant_available = False
+    if settings.qdrant_url:
+        try:
+            await init_qdrant()
+            app.state.qdrant_available = True
+            logger.info("Qdrant connected")
+        except Exception as exc:
+            logger.warning(
+                "Qdrant unavailable — running without vector search", extra={"error": str(exc)}
             )
 
     # ── MCP server ────────────────────────────────────────────────────
@@ -73,6 +86,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         from core.database import close_db
 
         await close_db()
+
+    if app.state.qdrant_available:
+        await close_qdrant()
 
 
 def create_app() -> FastAPI:

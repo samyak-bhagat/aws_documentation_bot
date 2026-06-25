@@ -1,4 +1,9 @@
-"""Node: search AWS documentation via MCP and store ranked results."""
+"""Node: search AWS documentation.
+
+Strategy (Phase 7+):
+  1. If Qdrant has indexed docs for this service → hybrid search (vector + BM25 + RRF)
+  2. Otherwise → fall back to MCP keyword search and update cache/index
+"""
 
 from agents.graph.state import AgentState
 from core.logging import get_logger
@@ -14,12 +19,29 @@ def make_doc_searcher(mcp_tools: AWSDocsMCPTools):
 
     async def node(state: AgentState) -> dict:
         query = state["optimized_query"]
+        service = state.get("aws_service", "").lower() or None
         logger.info("Searching docs", extra={"query": query})
 
+        # ── Try hybrid search if Qdrant is available ──────────────────
+        try:
+            from services.vector.client import collection_has_docs
+            from services.vector.retriever import hybrid_search
+
+            has_docs = await collection_has_docs(service_name=service)
+            if has_docs:
+                results = await hybrid_search(query, service_name=service, top_n=_SEARCH_LIMIT)
+                if results:
+                    logger.info("Hybrid search used", extra={"result_count": len(results)})
+                    return {"search_results": [r.model_dump() for r in results]}
+        except Exception as exc:
+            logger.warning(
+                "Hybrid search unavailable — falling back to MCP", extra={"error": str(exc)}
+            )
+
+        # ── Fallback: MCP search ──────────────────────────────────────
         results = await mcp_tools.search_documentation(query, limit=_SEARCH_LIMIT)
         serialised = [r.model_dump() for r in results]
-
-        logger.info("Search complete", extra={"result_count": len(serialised)})
+        logger.info("MCP search used", extra={"result_count": len(serialised)})
         return {"search_results": serialised}
 
     return node

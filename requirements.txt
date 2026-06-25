@@ -25,6 +25,10 @@ alembic>=1.13.0
 # Sync pipeline (Phase 6+)
 apscheduler>=3.10.0
 
+# Vector search (Phase 7+)
+qdrant-client[fastembed]>=1.9.0
+rank-bm25>=0.2.0
+
 # Utilities
 python-dotenv>=1.0.0
 
