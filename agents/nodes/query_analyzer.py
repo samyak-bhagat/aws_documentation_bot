@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
 
 from agents.graph.state import AgentState
@@ -19,7 +19,7 @@ class _QueryAnalysis(BaseModel):
     optimized_query: str
 
 
-def make_query_analyzer(llm: ChatOpenAI):
+def make_query_analyzer(llm: BaseChatModel):
     """Return a LangGraph node function with the LLM injected."""
     structured_llm = llm.with_structured_output(_QueryAnalysis)
 

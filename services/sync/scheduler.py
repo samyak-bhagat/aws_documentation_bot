@@ -1,4 +1,4 @@
-"""Knowledge sync pipeline — Phase 6.
+"""Knowledge sync pipeline.
 
 Workflow:
   1. Fetch AWS What's New RSS feed
@@ -7,7 +7,7 @@ Workflow:
   4. Read each result page via MCP
   5. Compute SHA-256 hash
   6. If hash differs from cached value → upsert
-  7. If unchanged → skip
+  7. If changed → index into OpenSearch
 
 Schedule: daily at 02:00 UTC via APScheduler.
 Trigger manually: POST /admin/sync
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from core.config import settings
 from core.logging import get_logger
 from services.sync.whats_new import fetch_whats_new, items_to_service_updates
 
@@ -120,22 +121,21 @@ async def run_sync(mcp_tools: AWSDocsMCPTools, db_available: bool = True) -> Syn
                     logger.info("Cache updated", extra={"url": url})
                     result.pages_updated += 1
 
-                    # Index into Qdrant if available
-                    try:
-                        from services.vector.client import _client as qdrant_client  # noqa: PLC0415
-                        from services.vector.indexer import index_document  # noqa: PLC0415
+                    if settings.vector_search_enabled:
+                        try:
+                            from services.vector.indexer import index_document
 
-                        if qdrant_client is not None:
                             await index_document(
                                 url=url,
                                 title=doc.title or search_result.title,
                                 content=doc.content,
                                 doc_hash=new_hash,
                             )
-                    except Exception as exc:
-                        logger.warning(
-                            "Qdrant indexing skipped", extra={"url": url, "error": str(exc)}
-                        )
+                        except Exception as exc:
+                            logger.warning(
+                                "Vector indexing skipped",
+                                extra={"url": url, "error": str(exc)},
+                            )
 
     logger.info(
         "Sync complete",

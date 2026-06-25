@@ -1,7 +1,7 @@
 # AGENT.md — AWS Documentation Assistant
 
 > Agentic RAG chatbot for AWS Documentation.  
-> Built phase-by-phase — starting with an OpenAI key and a GitHub account, ending with a production-grade system.
+> Phases 1–8 are complete. **Phase 9 (AWS-native production hardening) is complete** on branch `refactor/aws-native-production-hardening`.
 
 ---
 
@@ -10,21 +10,22 @@
 1. [Objective](#objective)
 2. [What You Have Right Now](#what-you-have-right-now)
 3. [Development Phases](#development-phases)
-4. [Phase 1 — MCP Foundation](#phase-1--mcp-foundation)
-5. [Phase 2 — Research Agent (LangGraph)](#phase-2--research-agent-langgraph)
-6. [Phase 3 — FastAPI Layer](#phase-3--fastapi-layer)
-7. [Phase 4 — CI/CD + Docker](#phase-4--cicd--docker)
-8. [Phase 5 — Documentation Cache (PostgreSQL)](#phase-5--documentation-cache-postgresql)
-9. [Phase 6 — Knowledge Sync Pipeline](#phase-6--knowledge-sync-pipeline)
-10. [Phase 7 — Vector Search Layer (Qdrant)](#phase-7--vector-search-layer-qdrant)
-11. [Phase 8 — Production Hardening](#phase-8--production-hardening)
-12. [Final Architecture](#final-architecture)
-13. [Repository Structure](#repository-structure)
-14. [Environment Variables](#environment-variables)
-15. [Docker Services](#docker-services)
-16. [API Contracts](#api-contracts)
-17. [Technology Stack](#technology-stack)
-18. [Definition of Done](#definition-of-done)
+4. [**Phase 9 — AWS-Native Production Hardening (COMPLETE)**](#phase-9--aws-native-production-hardening-complete)
+5. [Phase 1 — MCP Foundation](#phase-1--mcp-foundation)
+6. [Phase 2 — Research Agent (LangGraph)](#phase-2--research-agent-langgraph)
+7. [Phase 3 — FastAPI Layer](#phase-3--fastapi-layer)
+8. [Phase 4 — CI/CD + Docker](#phase-4--cicd--docker)
+9. [Phase 5 — Documentation Cache (PostgreSQL)](#phase-5--documentation-cache-postgresql)
+10. [Phase 6 — Knowledge Sync Pipeline](#phase-6--knowledge-sync-pipeline)
+11. [Phase 7 — Vector Search Layer (Qdrant)](#phase-7--vector-search-layer-qdrant)
+12. [Phase 8 — Production Hardening](#phase-8--production-hardening)
+13. [Final Architecture](#final-architecture)
+14. [Repository Structure](#repository-structure)
+15. [Environment Variables](#environment-variables)
+16. [Docker Services](#docker-services)
+17. [API Contracts](#api-contracts)
+18. [Technology Stack](#technology-stack)
+19. [Definition of Done](#definition-of-done)
 
 ---
 
@@ -42,13 +43,16 @@ Build an AI assistant that answers questions about AWS services using **only off
 
 | Resource | Status |
 |---|---|
-| OpenAI API Key | ✅ Available |
-| GitHub Account | ✅ Available |
-| AWS Account | ❌ Not needed for Phase 1–4 |
-| Cloud hosting | ❌ Not needed for Phase 1–4 |
-| Qdrant / PostgreSQL | ❌ Added in Phase 5+ via Docker |
+| Phases 1–8 (MCP → Auth/UI) | ✅ Implemented |
+| AWS ECS / RDS / OpenSearch / Bedrock (Terraform) | ✅ Provisioned |
+| GitHub Actions CI + Deploy | ✅ Running |
+| Dual-path LLM (OpenAI local / Bedrock AWS) | ✅ Removed in Phase 9 |
+| Dual-path vector (Qdrant local / OpenSearch AWS) | ✅ Removed in Phase 9 |
+| Alembic migrations | ✅ Implemented (`alembic/versions/001_initial_schema.py`) |
+| OpenTelemetry foundation | ✅ Implemented (`core/telemetry.py`) |
+| Integration / e2e tests | ❌ Not implemented |
 
-**Start with Phase 1. Everything runs locally.**
+**Stack is AWS-native:** Bedrock + OpenSearch + RDS. Use `APP_ENV=development` for local partial runs.
 
 ---
 
@@ -85,6 +89,421 @@ gantt
 | 6 | Daily knowledge sync job | Phase 5 |
 | 7 | Qdrant vector search | Docker |
 | 8 | Auth, observability, rate limiting | Phase 7 |
+
+---
+
+## Phase 9 — AWS-Native Production Hardening (COMPLETE)
+
+> **Handoff document for coding agents.** Execute this plan on branch:
+>
+> ```
+> refactor/aws-native-production-hardening
+> ```
+>
+> Create the branch from `main`:
+> ```bash
+> git checkout main
+> git pull
+> git checkout -b refactor/aws-native-production-hardening
+> ```
+
+### Context
+
+Phases 1–8 built a working system with **dual backend paths**:
+
+| Concern | Local / dev path (remove) | AWS / production path (keep) |
+|---------|---------------------------|------------------------------|
+| LLM | OpenAI GPT-4o via `langchain-openai` | Amazon Bedrock Claude via `langchain-aws` |
+| Embeddings | OpenAI `text-embedding-3-small` (1536-d) | Bedrock Titan Embed Text v2 (1024-d) |
+| Vector search | Qdrant | Amazon OpenSearch (k-NN) |
+
+ECS is **already AWS-native** — Terraform injects `BEDROCK_MODEL_ID`, `OPENSEARCH_ENDPOINT`, and does not set `OPENAI_API_KEY` (`infra/terraform/modules/ecs/main.tf`). Phase 9 removes the legacy local paths, fixes known bugs, and hardens for production.
+
+**Detailed docs (update after each step):** `docs/system-architecture.md`, `docs/api.md`, `docs/ai-rag-strategy.md`, `docs/deployment-strategy.md`, `README.md`.
+
+### Goals
+
+1. Single LLM backend: **Bedrock only**
+2. Single vector backend: **OpenSearch only**
+3. Remove dead code and unused dependencies
+4. Fix sync pipeline OpenSearch indexing bug
+5. Fail-fast startup when required AWS services are misconfigured
+6. Update CI/CD to remove OpenAI secrets (unit tests do not call OpenAI today)
+7. Production hardening: migrations, health checks, observability foundation
+8. Clean code: no phase comments, no dual-path `if use_bedrock` branching
+
+### Non-Goals (defer to follow-up PRs)
+
+- LocalStack-based offline dev environment
+- WAF / Route 53 custom domain (Terraform supports it; not required for this branch)
+- Full Grafana dashboards
+- Load testing suite
+
+### Recommended PR Strategy
+
+Split into reviewable PRs on the same branch (or stacked PRs):
+
+| PR | Scope | Depends on |
+|----|-------|------------|
+| **PR-1** | Fix sync indexing + dead code removal (safe, small) | — |
+| **PR-2** | Remove OpenAI + Qdrant code paths | PR-1 |
+| **PR-3** | Config fail-fast + expanded `/health` | PR-2 |
+| **PR-4** | CI/CD cleanup + docs update | PR-2 |
+| **PR-5** | Alembic migrations | PR-3 |
+| **PR-6** | OpenTelemetry foundation | PR-3 |
+
+---
+
+### Step 1 — Fix Sync → OpenSearch Indexing (DO FIRST)
+
+**Bug:** `services/sync/scheduler.py` checks Qdrant client directly after cache upsert. On AWS (OpenSearch only), indexing is silently skipped until manual `POST /admin/reindex`.
+
+**File:** `services/sync/scheduler.py` (lines ~123–138)
+
+**Change:**
+- Remove import of `services.vector.client._client as qdrant_client`
+- Replace with: if `settings.vector_search_enabled` (or always, after Step 2), call `index_document()` from `services/vector/indexer`
+- `index_document()` already routes to OpenSearch when `use_opensearch` is true
+
+**Done when:** After `/admin/sync` on AWS, new/changed docs appear in OpenSearch without manual reindex.
+
+---
+
+### Step 2 — Remove OpenAI Code Path
+
+**Files to modify:**
+
+| File | Action |
+|------|--------|
+| `services/llm/factory.py` | Remove OpenAI branch; always return `ChatBedrock`. Require `bedrock_model_id`. |
+| `services/vector/embedder.py` | Remove `_get_openai`, `_embed_openai`, `_openai_client`; always use `_embed_bedrock`. |
+| `core/config.py` | Remove `openai_api_key`, `openai_model`, `use_bedrock` property (Bedrock is always on). Make `bedrock_model_id` required (non-empty default or validator). |
+| `requirements.txt` | Remove `openai`, `langchain-openai` |
+| `.env.example` | Remove `OPENAI_API_KEY`, `OPENAI_MODEL` |
+
+**Done when:** `grep -r "openai\|ChatOpenAI\|langchain_openai" --include="*.py" .` returns no matches outside tests/docs/history.
+
+---
+
+### Step 3 — Remove Qdrant Code Path
+
+**Files to DELETE:**
+
+```
+services/vector/client.py
+```
+
+**Files to MODIFY:**
+
+| File | Action |
+|------|--------|
+| `services/vector/store.py` | OpenSearch only — remove Qdrant imports and `use_qdrant` branches |
+| `services/vector/retriever.py` | Remove `_qdrant_vector_search`, `_qdrant_bm25_search`; keep OpenSearch implementations only |
+| `services/vector/indexer.py` | Remove `_upsert_qdrant` and Qdrant branch in `index_document()` |
+| `core/config.py` | Remove `qdrant_url`, `qdrant_collection`, `use_qdrant`, `use_opensearch` flags. `OPENSEARCH_ENDPOINT` becomes required. |
+| `apps/api/main.py` | Update lifespan comments; vector init is OpenSearch only |
+| `agents/nodes/doc_searcher.py` | Update docstring (remove "Qdrant" references) |
+| `apps/api/routers/admin.py` | Update docstrings ("Qdrant" → "vector store" / "OpenSearch") |
+| `infra/docker/docker-compose.yml` | Remove `qdrant` service, `qdrant_data` volume, `QDRANT_URL` env |
+| `requirements.txt` | Remove `qdrant-client[fastembed]` |
+| `.env.example` | Remove `QDRANT_URL`, `QDRANT_COLLECTION` |
+
+**Done when:** `grep -r "qdrant\|Qdrant" --include="*.py" .` returns no matches outside docs/AGENT.md history.
+
+---
+
+### Step 4 — Remove Dead Code
+
+| Item | Location | Action |
+|------|----------|--------|
+| Unused `_get_session()` | `apps/api/routers/auth.py:61` | Delete function |
+| Unused MCP tools | `services/mcp/tools.py` | Delete `read_sections()`, `recommend()` and their constants unless tests cover them |
+| Stale terraform note | `infra/terraform/README.md:111` | Remove "Application code changes still required" section (Bedrock/OpenSearch migration is done) |
+| Phase comment noise | All `*.py` | Remove `# Phase N` comments; keep meaningful docstrings only |
+
+**Alembic:** Listed in `requirements.txt` but unused. **Keep the dependency** — Step 7 adds migrations. Do not remove yet.
+
+---
+
+### Step 5 — Configuration: Fail-Fast Startup
+
+**File:** `core/config.py`
+
+Add a `validate_production_config()` method or Pydantic `@model_validator` that raises on startup if any required var is empty:
+
+| Variable | Required |
+|----------|----------|
+| `BEDROCK_MODEL_ID` | Yes |
+| `BEDROCK_EMBED_MODEL_ID` | Yes (has default) |
+| `AWS_REGION` | Yes (has default) |
+| `OPENSEARCH_ENDPOINT` | Yes |
+| `DATABASE_URL` | Yes (auth + cache + memory require it) |
+| `JWT_SECRET` | Yes — reject default `change-me-in-production` in non-dev |
+
+**File:** `apps/api/main.py`
+
+- Call validation at start of `lifespan` before connecting services
+- Change PostgreSQL / OpenSearch init from warn-and-continue to **raise** (or gate behind `ENV=development` flag for local mock mode)
+
+**Optional dev escape hatch (recommended):**
+
+```bash
+APP_ENV=development   # allows missing OpenSearch with warning (CLI agent only)
+APP_ENV=production    # strict — default on ECS
+```
+
+**Done when:** API refuses to start without Bedrock + OpenSearch + DB in production mode.
+
+---
+
+### Step 6 — Expanded Health Checks
+
+**File:** `apps/api/routers/health.py`, `apps/api/schemas.py`
+
+Extend `HealthResponse`:
+
+```json
+{
+  "status": "ok",
+  "mcp_connected": true,
+  "database_connected": true,
+  "vector_store_connected": true,
+  "scheduler_running": true
+}
+```
+
+Populate from `request.app.state` flags set in lifespan.
+
+Add `GET /health/ready` (optional) that returns `503` if any critical dependency is down — use for ECS health checks.
+
+**File:** `infra/terraform/modules/ecs/main.tf` — point ECS health check to `/health/ready` if added.
+
+---
+
+### Step 7 — Alembic Database Migrations
+
+**Create:**
+
+```
+alembic/
+├── env.py
+├── script.py.mako
+└── versions/
+    └── 001_initial_schema.py
+```
+
+Initial migration must create tables currently defined in:
+
+- `services/cache/models.py` → `aws_docs_cache`
+- `services/memory/models.py` → `chat_sessions`, `chat_messages`
+- `services/auth/models.py` → `users`
+
+**File:** `core/database.py`
+
+- Replace `Base.metadata.create_all` with Alembic upgrade on startup **or** run migrations as ECS init container / deploy step
+- Prefer: migrations run in CI/deploy, not on every app boot
+
+**Done when:** Fresh RDS instance can be initialised with `alembic upgrade head` without `create_all()`.
+
+---
+
+### Step 8 — CI/CD Updates
+
+**Current state:** Unit tests (`tests/unit/`) do **not** call OpenAI, Bedrock, or Qdrant. `OPENAI_API_KEY` in CI is unnecessary.
+
+#### `.github/workflows/ci.yml`
+
+| Change | Detail |
+|--------|--------|
+| Remove | `OPENAI_API_KEY`, `OPENAI_MODEL` from `test` job env |
+| Replace | `langchain-openai` in mypy install → `langchain-aws` |
+| Add (optional) | `workflow_call` reusable test job for deploy to consume |
+
+#### `.github/workflows/deploy.yml`
+
+| Change | Detail |
+|--------|--------|
+| Remove | `OPENAI_API_KEY` from test job |
+| Keep | `AWS_ROLE_ARN` for ECR push + ECS deploy (unchanged) |
+
+#### New (optional): `.github/workflows/integration.yml`
+
+- Trigger: `workflow_dispatch` or nightly cron
+- Uses `AWS_ROLE_ARN` OIDC
+- Smoke tests: Bedrock invoke, OpenSearch ping, MCP connectivity
+- **Not required for every PR** — too slow/costly
+
+#### GitHub Secrets after Phase 9
+
+| Secret | Still needed? |
+|--------|---------------|
+| `OPENAI_API_KEY` | **Remove** |
+| `AWS_ROLE_ARN` | Yes (deploy + optional integration) |
+
+**Done when:** CI passes with zero OpenAI references; deploy workflow unchanged except secret removal.
+
+---
+
+### Step 9 — Local Development Story (Post-Migration)
+
+After removing OpenAI/Qdrant, local dev options:
+
+| Mode | Setup | Use case |
+|------|-------|----------|
+| **AWS credentials** | `.env` with Bedrock + OpenSearch endpoints (or SSM port-forward to RDS/OpenSearch) | Full integration testing |
+| **Docker Compose (slim)** | API + UI + PostgreSQL only; OpenSearch/Bedrock via AWS | Partial local stack |
+| **CLI agent** | `python -m agents.graph.builder "..."` with AWS creds | Agent debugging |
+| **Mock mode** | `APP_ENV=development` + mock LLM/embedder fixtures | Unit/dev without AWS costs |
+
+Update `infra/docker/docker-compose.yml` to PostgreSQL + API + UI only (no Qdrant).
+
+Document in `README.md` and `docs/deployment-strategy.md`.
+
+---
+
+### Step 10 — Observability Foundation
+
+**Create:** `core/telemetry.py`
+
+- OpenTelemetry tracer provider (stdout exporter for dev; OTLP for ECS)
+- Instrument FastAPI (`opentelemetry-instrumentation-fastapi`)
+- Span around each LangGraph node invocation
+- Span around Bedrock `invoke_model` and OpenSearch queries
+
+**Add to requirements.txt:**
+
+```
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-otlp
+```
+
+**ECS:** CloudWatch already configured in task definition. OTEL can export to CloudWatch via ADOT sidecar (defer sidecar to follow-up).
+
+**Done when:** A `/chat` request produces trace spans visible in logs or OTLP collector.
+
+---
+
+### Step 11 — Clean Code Standards
+
+Apply across all touched files:
+
+1. **No dual-path branching** — one backend per concern
+2. **No `# Phase N` comments** — use module docstrings
+3. **Dependency injection** — pass `mcp_tools`, `db_session`, LLM into graph builder (already partial; extend where globals remain)
+4. **Consistent error responses** — map internal exceptions to HTTP status codes; never expose raw stack traces in `detail`
+5. **Type hints** — maintain mypy clean on `services/ agents/ apps/ core/`
+6. **Tests** — update/add unit tests for config validation, health schema, embedder (mock boto3)
+
+Run before every commit:
+
+```bash
+ruff check .
+ruff format .
+mypy services/ agents/ apps/ core/ --ignore-missing-imports
+pytest tests/unit/ -v
+```
+
+---
+
+### Step 12 — Documentation Updates
+
+After code changes, update:
+
+| File | Changes |
+|------|---------|
+| `README.md` | Remove OpenAI/Qdrant from tech stack, prerequisites, env vars |
+| `docs/system-architecture.md` | Single-backend diagrams; remove Qdrant/OpenAI nodes |
+| `docs/ai-rag-strategy.md` | Bedrock-only LLM/embedder; OpenSearch-only retrieval |
+| `docs/deployment-strategy.md` | Updated docker-compose; remove OpenAI CI secrets |
+| `docs/api.md` | Expanded health response schema |
+| `AGENT.md` | Mark Phase 9 complete; update Technology Stack table below |
+
+---
+
+### Files Inventory (Quick Reference)
+
+#### DELETE
+
+```
+services/vector/client.py
+```
+
+#### MODIFY (core migration)
+
+```
+core/config.py
+core/database.py
+services/llm/factory.py
+services/vector/embedder.py
+services/vector/store.py
+services/vector/retriever.py
+services/vector/indexer.py
+services/sync/scheduler.py
+apps/api/main.py
+apps/api/routers/health.py
+apps/api/routers/admin.py
+apps/api/routers/auth.py
+apps/api/schemas.py
+agents/nodes/doc_searcher.py
+requirements.txt
+.env.example
+infra/docker/docker-compose.yml
+.github/workflows/ci.yml
+.github/workflows/deploy.yml
+infra/terraform/README.md
+README.md
+docs/*.md
+```
+
+#### CREATE (production hardening)
+
+```
+alembic/env.py
+alembic/versions/001_initial_schema.py
+core/telemetry.py          (Step 10)
+.github/workflows/integration.yml   (optional, Step 8)
+```
+
+---
+
+### Phase 9 Definition of Done
+
+| # | Criterion | Verify |
+|---|-----------|--------|
+| 1 | No OpenAI code or dependencies | `grep -r openai --include="*.py"` clean |
+| 2 | No Qdrant code or dependencies | `grep -r qdrant --include="*.py"` clean |
+| 3 | Sync indexes to OpenSearch automatically | Run `/admin/sync`, query OpenSearch |
+| 4 | API fails fast without required env vars | Start without `BEDROCK_MODEL_ID` → exit |
+| 5 | `/health` reports all dependency status | curl `/health` |
+| 6 | CI passes without `OPENAI_API_KEY` | Green GitHub Actions |
+| 7 | ECS deploy succeeds | Push to main, services stable |
+| 8 | Alembic migrations work on fresh DB | `alembic upgrade head` on empty RDS |
+| 9 | All docs updated | No OpenAI/Qdrant in README or docs/ |
+| 10 | Unit tests pass | `pytest tests/unit/ -v` |
+
+---
+
+### Target Architecture (Post Phase 9)
+
+```mermaid
+flowchart TB
+    User[User] --> ALB[ALB]
+    ALB --> UI[Streamlit ECS]
+    ALB --> API[FastAPI ECS]
+    UI --> API
+
+    API --> Agent[LangGraph Agent]
+    Agent --> Bedrock[Amazon Bedrock<br/>Claude + Titan Embed]
+    Agent --> OS[Amazon OpenSearch<br/>k-NN + BM25]
+    Agent --> MCP[AWS Docs MCP Server]
+    Agent --> RDS[(RDS PostgreSQL)]
+
+    MCP --> AWSDocs[docs.aws.amazon.com]
+```
+
+**Single stack. No OpenAI. No Qdrant.**
 
 ---
 
@@ -1065,24 +1484,23 @@ RATE_LIMIT_PER_MINUTE=20
 
 ## Technology Stack
 
-| Layer | Technology | Introduced |
-|---|---|---|
-| Language | Python 3.12 | Phase 1 |
-| Agent Framework | LangGraph + LangChain | Phase 2 |
-| LLM | GPT-4o / GPT-4.1 | Phase 2 |
-| Knowledge Source | AWS Docs MCP Server | Phase 1 |
-| API | FastAPI + uvicorn | Phase 3 |
-| CI/CD | GitHub Actions | Phase 4 |
-| Containers | Docker + Docker Compose | Phase 4 |
-| Relational DB | PostgreSQL 16 | Phase 5 |
-| Embeddings | text-embedding-3-small | Phase 7 |
-| Vector DB | Qdrant | Phase 7 |
-| Keyword Search | rank_bm25 | Phase 7 |
-| Reranker | BAAI/bge-reranker-large | Phase 7 |
-| UI | Streamlit | Phase 8 |
-| Auth | FastAPI Users + python-jose | Phase 8 |
-| Observability | OpenTelemetry + Prometheus + Grafana | Phase 8 |
-| Rate Limiting | slowapi | Phase 8 |
+| Layer | Technology | Introduced | Phase 9 target |
+|---|---|---|---|
+| Language | Python 3.12 | Phase 1 | — |
+| Agent Framework | LangGraph + LangChain | Phase 2 | — |
+| LLM | ~~GPT-4o (OpenAI)~~ → **Amazon Bedrock Claude** | Phase 2 / 9 | Bedrock only |
+| Knowledge Source | AWS Docs MCP Server | Phase 1 | — |
+| API | FastAPI + uvicorn | Phase 3 | — |
+| CI/CD | GitHub Actions | Phase 4 | Remove OpenAI secrets |
+| Containers | Docker + Docker Compose | Phase 4 | Slim compose (no Qdrant) |
+| Relational DB | PostgreSQL 16 (RDS) | Phase 5 | Alembic migrations |
+| Embeddings | ~~OpenAI text-embedding-3-small~~ → **Bedrock Titan v2** | Phase 7 / 9 | Bedrock only |
+| Vector DB | ~~Qdrant~~ → **Amazon OpenSearch** | Phase 7 / 9 | OpenSearch only |
+| Keyword Search | rank_bm25 (+ OpenSearch match) | Phase 7 | — |
+| UI | Streamlit | Phase 8 | — |
+| Auth | python-jose + bcrypt | Phase 8 | — |
+| Observability | OpenTelemetry (planned) | Phase 9 | Implement in Step 10 |
+| Rate Limiting | slowapi | Phase 8 | — |
 
 ---
 
@@ -1096,5 +1514,6 @@ RATE_LIMIT_PER_MINUTE=20
 | 4 | CI/CD | Green GitHub Actions badge; `docker build` passes |
 | 5 | Doc Cache | Repeated queries hit PostgreSQL, not MCP |
 | 6 | Sync Job | Daily job updates cache for changed AWS docs |
-| 7 | Vector Search | Qdrant returns semantically relevant chunks |
-| 8 | Production | Auth, observability, rate limiting, Streamlit UI all working |
+| 7 | Vector Search | OpenSearch returns semantically relevant chunks |
+| 8 | Production | Auth, rate limiting, Streamlit UI all working |
+| **9** | **AWS-native hardening** | ✅ Complete — see [Phase 9](#phase-9--aws-native-production-hardening-complete) |

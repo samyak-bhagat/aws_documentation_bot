@@ -24,10 +24,8 @@ import asyncio
 import sys
 import uuid
 
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
-from pydantic import SecretStr
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.graph.state import AgentState
@@ -38,8 +36,8 @@ from agents.nodes.context_evaluator import context_evaluator_node
 from agents.nodes.doc_reader import make_doc_reader
 from agents.nodes.doc_searcher import make_doc_searcher
 from agents.nodes.query_analyzer import make_query_analyzer
-from core.config import settings
 from core.logging import get_logger
+from services.llm.factory import get_chat_llm
 from services.mcp.client import get_mcp_client
 from services.mcp.tools import AWSDocsMCPTools
 
@@ -89,11 +87,7 @@ def build_graph(
     mcp_tools: AWSDocsMCPTools, db_session: AsyncSession | None = None
 ) -> CompiledStateGraph:
     """Construct and compile the LangGraph research agent."""
-    llm = ChatOpenAI(
-        model=settings.openai_model,
-        temperature=0,
-        api_key=SecretStr(settings.openai_api_key),
-    )
+    llm = get_chat_llm()
 
     graph = StateGraph(AgentState)
 

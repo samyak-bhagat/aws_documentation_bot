@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from agents.graph.state import AgentState
 from core.logging import get_logger
@@ -14,7 +14,7 @@ _PROMPT = (Path(__file__).parent.parent / "prompts" / "answer_generation.txt").r
 _FALLBACK = "I could not find this information in the AWS documentation provided."
 
 
-def make_answer_generator(llm: ChatOpenAI):
+def make_answer_generator(llm: BaseChatModel):
     """Return a LangGraph node function with the LLM injected."""
 
     async def node(state: AgentState) -> dict:

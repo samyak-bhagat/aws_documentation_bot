@@ -11,4 +11,6 @@ dist/
 build/
 .vscode/
 .idea/
+infra/terraform/**/.terraform/
+infra/terraform/**/terraform.tfstate*
 README.md
