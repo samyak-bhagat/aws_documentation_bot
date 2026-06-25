@@ -1,10 +1,11 @@
-"""FastAPI application — Phase 5.
+"""FastAPI application — Phase 8.
 
 Lifespan:
   - Opens a single MCP session on startup (shared by all requests)
   - Initialises PostgreSQL tables (if DATABASE_URL is set)
-  - Builds the LangGraph agent once and stores it on app.state
-  - Closes MCP session and DB engine cleanly on shutdown
+  - Connects Qdrant (if QDRANT_URL is set)
+  - Starts daily knowledge sync scheduler
+  - Closes all resources cleanly on shutdown
 """
 
 from collections.abc import AsyncGenerator
@@ -12,9 +13,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from agents.graph.builder import build_graph
-from apps.api.routers import admin, chat, health
+from apps.api.routers import admin, auth, chat, health
 from core.config import settings
 from core.logging import get_logger
 from services.mcp.client import MCPClient
@@ -24,10 +28,13 @@ from services.vector.client import close_qdrant, init_qdrant
 
 logger = get_logger(__name__)
 
+# ── Rate limiter (shared across the app) ─────────────────────────────────────
+limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    """Startup: connect MCP + init DB. Shutdown: close both cleanly."""
+    """Startup: connect MCP + init DB + init Qdrant. Shutdown: close all cleanly."""
     # ── Database (optional — skipped if DATABASE_URL is empty) ────────
     app.state.db_available = False
     if settings.database_url:
@@ -62,11 +69,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         mcp_tools = AWSDocsMCPTools(client)
         app.state.mcp_tools = mcp_tools
         app.state.mcp_client = client
-        app.state.graph = build_graph(mcp_tools)  # graph without per-request DB session
+        app.state.graph = build_graph(mcp_tools)
         app.state.mcp_connected = True
         logger.info("MCP connected — agent ready")
 
-        # Start daily knowledge sync scheduler
         app.state.scheduler = start_scheduler(mcp_tools, db_available=app.state.db_available)
     except Exception as exc:
         logger.error("MCP connection failed", extra={"error": str(exc)})
@@ -95,19 +101,25 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="AWS Documentation Assistant",
         description="Answers AWS questions using only official AWS documentation via MCP.",
-        version="0.5.0",
+        version="0.8.0",
         lifespan=lifespan,
     )
 
+    # ── Rate limiting ─────────────────────────────────────────────────
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+
+    # ── CORS ──────────────────────────────────────────────────────────
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:8501"],  # Streamlit UI in Phase 8
+        allow_origins=["http://localhost:8501"],  # Streamlit UI
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
     app.include_router(health.router)
+    app.include_router(auth.router)
     app.include_router(chat.router)
     app.include_router(admin.router)
 

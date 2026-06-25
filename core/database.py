@@ -35,6 +35,7 @@ async def init_db(database_url: str | None = None) -> None:
     _session_factory = async_sessionmaker(_engine, expire_on_commit=False)
 
     # Import models so their tables are registered with Base.metadata
+    import services.auth.models  # noqa: F401
     import services.cache.models  # noqa: F401
     import services.memory.models  # noqa: F401
 

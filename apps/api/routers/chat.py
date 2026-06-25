@@ -3,19 +3,30 @@
 import time
 import uuid
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from agents.graph.builder import build_graph
 from agents.graph.state import AgentState
 from apps.api.schemas import ChatRequest, ChatResponse, Citation
+from core.config import settings
 from core.logging import get_logger
+from services.auth.jwt import TokenPayload, get_current_user
+
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 logger = get_logger(__name__)
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+@limiter.limit(f"{settings.rate_limit_per_minute}/minute")
+async def chat(
+    body: ChatRequest,
+    request: Request,
+    current_user: TokenPayload = Depends(get_current_user),  # noqa: B008
+) -> ChatResponse:
     mcp_tools = getattr(request.app.state, "mcp_tools", None)
     if mcp_tools is None:
         raise HTTPException(
@@ -23,7 +34,10 @@ async def chat(body: ChatRequest, request: Request) -> ChatResponse:
         )
 
     session_id = body.session_id or str(uuid.uuid4())
-    logger.info("Chat request received", extra={"session_id": session_id, "query": body.query})
+    logger.info(
+        "Chat request received",
+        extra={"session_id": session_id, "query": body.query, "user_id": current_user.sub},
+    )
 
     db_available = getattr(request.app.state, "db_available", False)
 

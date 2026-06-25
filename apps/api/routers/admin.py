@@ -6,10 +6,11 @@ POST /admin/reindex  — (re)index all doc_cache entries into Qdrant
 
 import dataclasses
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from core.logging import get_logger
+from services.auth.jwt import TokenPayload, get_admin_user
 from services.sync.scheduler import run_sync
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -33,7 +34,9 @@ class ReindexResponse(BaseModel):
 
 
 @router.post("/sync", response_model=SyncResponse)
-async def trigger_sync(request: Request) -> SyncResponse:
+async def trigger_sync(
+    request: Request, _admin: TokenPayload = Depends(get_admin_user)  # noqa: B008
+) -> SyncResponse:
     """Manually trigger the knowledge sync pipeline (no auth required in dev)."""
     mcp_tools = getattr(request.app.state, "mcp_tools", None)
     if mcp_tools is None:
@@ -50,7 +53,9 @@ async def trigger_sync(request: Request) -> SyncResponse:
 
 
 @router.post("/reindex", response_model=ReindexResponse)
-async def trigger_reindex(request: Request) -> ReindexResponse:
+async def trigger_reindex(
+    request: Request, _admin: TokenPayload = Depends(get_admin_user)  # noqa: B008
+) -> ReindexResponse:
     """Re-index all cached docs from PostgreSQL into Qdrant."""
     if not getattr(request.app.state, "db_available", False):
         raise HTTPException(status_code=503, detail="PostgreSQL not available.")
