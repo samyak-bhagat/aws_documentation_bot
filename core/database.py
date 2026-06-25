@@ -3,11 +3,11 @@
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
+from alembic.command import stamp, upgrade
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
-from alembic import command
 from core.config import settings
 from core.logging import get_logger
 
@@ -49,11 +49,11 @@ def _run_migrations() -> None:
 
     legacy_tables = {"aws_docs_cache", "chat_sessions", "users", "chat_messages"}
     if legacy_tables.issubset(tables) and "alembic_version" not in tables:
-        command.stamp(alembic_cfg, "head")
+        stamp(alembic_cfg, "head")
         logger.info("Existing schema detected — stamped Alembic head")
         return
 
-    command.upgrade(alembic_cfg, "head")
+    upgrade(alembic_cfg, "head")
     logger.info("Alembic migrations applied")
 
 

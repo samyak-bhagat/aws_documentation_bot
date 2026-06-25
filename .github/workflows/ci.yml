@@ -38,7 +38,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install mypy + stubs
-        run: pip install mypy pydantic pydantic-settings langchain-aws langgraph fastapi
+        run: pip install mypy pydantic pydantic-settings langchain-aws langgraph fastapi alembic sqlalchemy
 
       - name: Run mypy
         run: mypy services/ agents/ apps/ core/ --ignore-missing-imports
