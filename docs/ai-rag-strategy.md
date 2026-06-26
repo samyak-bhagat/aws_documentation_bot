@@ -180,7 +180,6 @@ Builds deduplicated `{title, url}` list from documents read (not from LLM output
 | Condition | Provider | Model |
 |-----------|----------|-------|
 | `BEDROCK_MODEL_ID` set | `ChatBedrock` (langchain-aws) | Value of `BEDROCK_MODEL_ID` |
-| Default (local dev) | `ChatOpenAI` | `OPENAI_MODEL` (default `gpt-4o`) |
 
 Both providers use `temperature=0`.
 
@@ -197,10 +196,9 @@ Both providers use `temperature=0`.
 
 | Condition | Provider | Model | Dimensions |
 |-----------|----------|-------|------------|
-| `use_bedrock` | Bedrock Runtime | `BEDROCK_EMBED_MODEL_ID` (default Titan v2) | 1024 |
-| Default | OpenAI | `text-embedding-3-small` | 1536 |
+| Always | Bedrock Runtime | `BEDROCK_EMBED_MODEL_ID` (default Titan v2) | 1024 |
 
-Batch size: 100 texts per OpenAI request with 100ms delay between batches.
+Each input text is embedded individually through Bedrock; batching is handled by the caller at the chunk level.
 
 Used by: vector indexer, hybrid retriever (query embedding).
 
@@ -228,7 +226,7 @@ Service name is inferred from URL path (e.g. `docs.aws.amazon.com/AmazonS3/...` 
 
 1. Chunk document via `chunk_document()`
 2. Embed all chunk texts via `embed_texts()`
-3. Upsert to Qdrant or OpenSearch in batches of 50
+3. Upsert to OpenSearch in batches of 50
 
 **Chunk ID:** UUID5 derived from `{url}#{chunk_index}` (deterministic, idempotent re-index).
 
@@ -241,12 +239,9 @@ Service name is inferred from URL path (e.g. `docs.aws.amazon.com/AmazonS3/...` 
 
 **Facade:** `services/vector/store.py`
 
-| Backend | Init function | Collection/index | Vector size |
-|---------|---------------|------------------|-------------|
-| Qdrant | `init_qdrant()` | `aws_docs` | 1536 (cosine) |
-| OpenSearch | `init_opensearch()` | `aws_docs` | 1024 (HNSW, faiss) |
-
-OpenSearch takes precedence when `OPENSEARCH_ENDPOINT` is set.
+| Backend | Init function | Index | Vector size |
+|---------|---------------|-------|-------------|
+| OpenSearch | `init_opensearch()` | `aws_docs` | 1024 |
 
 ---
 
@@ -270,7 +265,6 @@ flowchart LR
 
 | Backend | Method |
 |---------|--------|
-| Qdrant | `query_points()` with embedded query vector |
 | OpenSearch | k-NN query on `embedding` field |
 
 Optional filter: `service_name` (not used by doc searcher currently).
@@ -279,7 +273,6 @@ Optional filter: `service_name` (not used by doc searcher currently).
 
 | Backend | Method |
 |---------|--------|
-| Qdrant | Scroll up to 2,000 points, in-memory `BM25Okapi` scoring |
 | OpenSearch | Native `match` query on `chunk_text` |
 
 ### Reciprocal Rank Fusion (RRF)
@@ -302,11 +295,11 @@ The vector index is populated incrementally by the sync pipeline, not by bulk in
 2. Map headlines to service names via keyword dictionary (~40 services)
 3. MCP search per service → read top 3 pages
 4. SHA-256 hash compare against PostgreSQL cache
-5. On change: upsert cache + index into Qdrant (if client initialised)
+5. On change: upsert cache + index into OpenSearch when the vector store is available
 
 **Schedule:** Daily at 02:00 UTC via APScheduler.
 
-**Note:** Sync indexing currently checks Qdrant client directly. OpenSearch indexing works via `index_document()` when `use_opensearch` is true, but the sync scheduler's Qdrant-specific check may skip indexing on OpenSearch-only deployments until `/admin/reindex` is called.
+**Note:** The sync pipeline indexes changed pages through the shared vector indexer, which routes to OpenSearch for the current AWS deployment.
 
 ---
 
