@@ -45,13 +45,11 @@ flowchart TB
     subgraph external [External Systems]
         MCPServer[AWS Docs MCP Server]
         AWSDocs[docs.aws.amazon.com]
-        OpenAI[OpenAI API]
         Bedrock[Amazon Bedrock]
     end
 
     subgraph persistence [Persistence]
         PG[(PostgreSQL)]
-        Qdrant[(Qdrant)]
         OS[(OpenSearch)]
     end
 
@@ -64,12 +62,10 @@ flowchart TB
     Graph --> Cache
     Graph --> Vector
     MCP --> MCPServer --> AWSDocs
-    LLM --> OpenAI
     LLM --> Bedrock
     Cache --> PG
     Memory --> PG
     Auth --> PG
-    Vector --> Qdrant
     Vector --> OS
     Sync --> MCP
     Sync --> Cache
@@ -89,7 +85,7 @@ flowchart TB
 | Client | Entry point | Notes |
 |--------|-------------|-------|
 | **Streamlit UI** | `apps/ui/app.py` | Login/register flow, multi-turn chat, citation display. Calls API at `API_URL` (default `http://localhost:8000`). |
-| **REST API** | `apps/api/main.py` | FastAPI v0.8.0. All `/chat` and `/admin` routes require JWT. |
+| **REST API** | `apps/api/main.py` | FastAPI v0.9.0. All `/chat` and `/admin` routes require JWT. |
 | **CLI** | `python -m agents.graph.builder` | Runs agent directly with MCP; no auth or PostgreSQL required. |
 
 ### 2. API Layer (`apps/api/`)
@@ -98,8 +94,8 @@ flowchart TB
 
 | Resource | Condition | Behaviour on failure |
 |----------|-----------|----------------------|
-| PostgreSQL | `DATABASE_URL` set | Creates tables via `init_db()`; sets `app.state.db_available` |
-| Vector store | `OPENSEARCH_ENDPOINT` or `QDRANT_URL` set | Calls `init_vector_store()`; sets `app.state.vector_available` |
+| PostgreSQL | `DATABASE_URL` set | Runs Alembic migrations via `init_db()`; sets `app.state.db_available` |
+| Vector store | `OPENSEARCH_ENDPOINT` set | Calls `init_vector_store()`; sets `app.state.vector_available` |
 | MCP session | Always attempted | Single shared session; sets `app.state.mcp_connected` |
 | Sync scheduler | After MCP connects | APScheduler daily job at 02:00 UTC |
 
@@ -129,10 +125,10 @@ See [AI / RAG Strategy](ai-rag-strategy.md) for the full graph topology.
 | Module | Responsibility |
 |--------|----------------|
 | `mcp/` | Stdio MCP client lifecycle; typed wrappers for AWS Docs tools |
-| `llm/` | Factory selecting OpenAI (dev) or Bedrock (prod) |
+| `llm/` | Bedrock-based chat model factory |
 | `cache/` | PostgreSQL document cache with SHA-256 hashing and TTL |
 | `memory/` | Multi-turn chat session and message persistence |
-| `vector/` | Chunking, embedding, indexing, hybrid retrieval (Qdrant or OpenSearch) |
+| `vector/` | Chunking, embedding, indexing, hybrid retrieval on OpenSearch |
 | `sync/` | What's New RSS pipeline and APScheduler integration |
 | `auth/` | JWT creation/validation, bcrypt password hashing, User model |
 
@@ -211,7 +207,7 @@ sequenceDiagram
 
 ### PostgreSQL Tables
 
-Created automatically by `init_db()` via SQLAlchemy `create_all()` (no Alembic migrations yet).
+Created and migrated by Alembic during application startup via `core.database._run_migrations()`.
 
 | Table | Model | Purpose |
 |-------|-------|---------|
@@ -239,8 +235,7 @@ Facade in `services/vector/store.py` selects backend:
 
 | Environment | Backend | Vector size | Embedding model |
 |-------------|---------|-------------|-----------------|
-| Local dev | Qdrant | 1536 | OpenAI `text-embedding-3-small` |
-| AWS prod | OpenSearch k-NN | 1024 | Bedrock Titan Embed Text v2 |
+| Local dev / AWS prod | OpenSearch k-NN | 1024 | Bedrock Titan Embed Text v2 |
 
 Collection/index name: `aws_docs`. Payload fields: `url`, `title`, `section`, `service_name`, `chunk_text`, `hash`, `chunk_index`.
 
@@ -276,7 +271,7 @@ Scheduled daily at **02:00 UTC** via APScheduler (`services/sync/scheduler.py`):
 2. Extract affected service names via keyword mapping
 3. For each service: MCP search → read top 3 pages → hash compare
 4. Upsert changed pages to PostgreSQL
-5. Index changed pages into Qdrant (if client is initialised)
+5. Index changed pages into OpenSearch when the vector store is available
 
 Manual trigger: `POST /admin/sync` (admin JWT).
 
@@ -288,10 +283,8 @@ Manual trigger: `POST /admin/sync` (admin JWT).
 
 | Flag | Condition | Effect |
 |------|-----------|--------|
-| `use_bedrock` | `BEDROCK_MODEL_ID` is set | LLM and embeddings use AWS Bedrock |
-| `use_opensearch` | `OPENSEARCH_ENDPOINT` is set | Vector search uses OpenSearch (overrides Qdrant) |
-| `use_qdrant` | `QDRANT_URL` set and OpenSearch not set | Vector search uses Qdrant |
-| `vector_search_enabled` | Either vector backend configured | Doc searcher attempts hybrid search |
+| `vector_search_enabled` | `OPENSEARCH_ENDPOINT` is set | Doc searcher attempts hybrid search |
+| `is_production` | `APP_ENV=production` | Enables strict startup validation for Bedrock, OpenSearch, and PostgreSQL |
 
 **Graceful degradation:** Missing PostgreSQL, vector store, or MCP each log a warning and the system continues with reduced functionality rather than crashing at startup (except MCP failure disables the agent).
 
@@ -314,22 +307,27 @@ Manual trigger: `POST /admin/sync` (admin JWT).
 
 | Environment | Compute | Database | Vector | LLM |
 |-------------|---------|----------|--------|-----|
-| Local (minimal) | Python process | None | None | OpenAI |
-| Local (Docker Compose) | 4 containers | PostgreSQL 16 | Qdrant | OpenAI |
+| Local (minimal) | Python process | None | None | Bedrock |
+| Local (Docker Compose) | 3 containers | PostgreSQL 16 | OpenSearch | Bedrock |
 | AWS (Terraform) | ECS Fargate (API + UI) | RDS PostgreSQL 16 | OpenSearch | Bedrock |
 
 See [Deployment Strategy](deployment-strategy.md) for provisioning details.
 
 ---
 
-## Known Gaps (vs. Planned Architecture)
+## Current Implementation Notes
 
-These items appear in `AGENT.md` but are **not yet implemented**:
+The repository now implements the core production path:
 
-- OpenTelemetry tracing and Prometheus metrics (`core/telemetry.py` does not exist)
-- Alembic database migrations (tables created via `create_all()`)
-- Integration and e2e test suites
-- Health endpoint does not report DB or vector store status
+- Bedrock-based LLM and embedding generation
+- OpenSearch-backed hybrid retrieval
+- Alembic-driven PostgreSQL migrations on startup
+- FastAPI health reporting for MCP, database, vector store, and scheduler status
+
+These areas remain operationally important but are already implemented:
+
+- Integration and e2e coverage can be extended over time
+- Observability can be expanded further via the existing telemetry hooks
 
 ---
 
