@@ -1,0 +1,20 @@
+# Local state files (if not using remote backend)
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+
+# Local tfvars file - should NOT be committed
+terraform.tfvars
+
+# Plan files
+tfplan
+*.tfplan
+
+# Log files
+*.log
+
+# IDE files
+.vscode/
+*.swp
+*.swo

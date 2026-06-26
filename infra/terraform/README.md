@@ -33,7 +33,18 @@ Provisions the full AWS stack from scratch for the AWS Documentation Bot:
 
 4. **Docker** — for building and pushing images to ECR
 
-## Step 1 — Bootstrap remote state (one time)
+## Multi-Environment Setup
+
+All environments (dev, staging, prod) use the same Terraform configuration with environment-specific `.tfvars` files.
+
+Available environments:
+- `terraform.dev.tfvars` — Development (minimal resources)
+- `terraform.staging.tfvars` — Staging (balanced resources)
+- `terraform.prod.tfvars` — Production (high availability, multi-AZ)
+
+## Step 1 — Bootstrap remote state (one time, optional)
+
+For local development, skip this step. For production with remote state:
 
 ```powershell
 cd infra/terraform/bootstrap
@@ -43,38 +54,61 @@ terraform apply
 
 Note the outputs: `state_bucket_name`, `lock_table_name`, `aws_account_id`.
 
-Uncomment the `backend "s3"` block in `environments/dev/main.tf` and replace `ACCOUNT_ID` with your account ID, then:
+Create backend configuration files in `infra/terraform/environments/`:
 
-```powershell
-cd ../environments/dev
-terraform init -migrate-state
+**backend-dev.tfbackend:**
+```hcl
+bucket         = "aws-docs-bot-terraform-state-ACCOUNT_ID"
+key            = "dev/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "aws-docs-bot-terraform-lock"
+encrypt        = true
 ```
 
-For the first run you can skip bootstrap and use **local state** (backend block stays commented).
+**backend-prod.tfbackend:** (replace `dev` with `prod` or `staging`)
 
-## Step 2 — Deploy infrastructure
+Then initialize with the backend config:
+```powershell
+cd ../environments
+terraform init -backend-config="backend-dev.tfbackend"
+```
+
+For the first run, you can skip bootstrap and use **local state** (no backend configuration needed).
+
+## Step 2 — Deploy infrastructure (any environment)
 
 ```powershell
-cd infra/terraform/environments/dev
-copy terraform.tfvars.example terraform.tfvars
+cd infra/terraform/environments
+
+# For development
 terraform init
-terraform plan
-terraform apply
+terraform plan -var-file="terraform.dev.tfvars"
+terraform apply -var-file="terraform.dev.tfvars"
+
+# For staging
+terraform plan -var-file="terraform.staging.tfvars"
+terraform apply -var-file="terraform.staging.tfvars"
+
+# For production
+terraform plan -var-file="terraform.prod.tfvars"
+terraform apply -var-file="terraform.prod.tfvars"
 ```
 
 First `apply` takes **20–40 minutes** (OpenSearch + RDS are slow).
 
-Save outputs:
+Save outputs for your environment:
 ```powershell
-terraform output alb_dns_name
-terraform output ecr_api_repository_url
+terraform output -var-file="terraform.dev.tfvars" alb_dns_name
+terraform output -var-file="terraform.dev.tfvars" ecr_api_repository_url
 ```
 
 ## Step 3 — Build and push Docker images
 
-After ECR repos exist:
+After ECR repos exist (from `terraform apply`):
 
 ```powershell
+# Use your environment's output variables
+$ENV = "dev"  # or "staging", "prod"
 $ACCOUNT = terraform output -raw aws_account_id
 $REGION  = terraform output -raw aws_region
 $API_ECR = terraform output -raw ecr_api_repository_url
@@ -89,11 +123,12 @@ docker build -f infra/docker/Dockerfile.ui -t "${UI_ECR}:latest" .
 docker push "${UI_ECR}:latest"
 
 # Force ECS to pull new images
-aws ecs update-service --cluster aws-docs-bot-dev-cluster --service aws-docs-bot-dev-api --force-new-deployment --region $REGION
-aws ecs update-service --cluster aws-docs-bot-dev-cluster --service aws-docs-bot-dev-ui --force-new-deployment --region $REGION
+$CLUSTER = "aws-docs-bot-${ENV}-cluster"
+aws ecs update-service --cluster $CLUSTER --service "aws-docs-bot-${ENV}-api" --force-new-deployment --region $REGION
+aws ecs update-service --cluster $CLUSTER --service "aws-docs-bot-${ENV}-ui" --force-new-deployment --region $REGION
 ```
 
-## Step 4 — Verify
+## Step 4 — Verify deployment
 
 Open the ALB URL from `terraform output alb_dns_name`.
 
@@ -115,10 +150,14 @@ python scripts/check_aws_access.py
 
 ## Step 5 — GitHub Actions deploy (optional)
 
-1. Re-run `terraform apply` with `enable_github_oidc = true` in `terraform.tfvars`
-2. Add GitHub secret: `AWS_ROLE_ARN` = output `github_actions_role_arn`
-3. **Remove** obsolete secret `OPENAI_API_KEY` (no longer used after Phase 9)
-4. Push to `main` — `.github/workflows/deploy.yml` builds and deploys
+1. Update your environment's `.tfvars` file to enable GitHub OIDC:
+   ```hcl
+   enable_github_oidc = true
+   ```
+2. Re-run `terraform apply -var-file="terraform.prod.tfvars"` (or your environment)
+3. Add GitHub secret: `AWS_ROLE_ARN` = output `github_actions_role_arn`
+4. **Remove** obsolete secret `OPENAI_API_KEY` (no longer used after Phase 9)
+5. Push to `main` — `.github/workflows/deploy.yml` builds and deploys
 
 Full post-deploy checklist: [`docs/post-deploy-runbook.md`](../../docs/post-deploy-runbook.md)
 

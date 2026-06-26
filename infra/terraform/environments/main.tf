@@ -12,10 +12,9 @@ terraform {
     }
   }
 
+  # S3 backend configuration — use `terraform init -backend-config` or .tfbackend files
   # Uncomment after bootstrap apply — see infra/terraform/README.md
   # backend "s3" {
-  #   bucket         = "aws-docs-bot-terraform-state-ACCOUNT_ID"
-  #   key            = "dev/terraform.tfstate"
   #   region         = "us-east-1"
   #   dynamodb_table = "aws-docs-bot-terraform-lock"
   #   encrypt        = true
@@ -44,7 +43,7 @@ locals {
 # ── 1. VPC ───────────────────────────────────────────────────────────────────
 
 module "vpc" {
-  source = "../../modules/vpc"
+  source = "../modules/vpc"
 
   name_prefix        = local.name_prefix
   vpc_cidr           = var.vpc_cidr
@@ -74,7 +73,7 @@ resource "aws_security_group" "app" {
 # ── 3. ECR ────────────────────────────────────────────────────────────────────
 
 module "ecr" {
-  source = "../../modules/ecr"
+  source = "../modules/ecr"
 
   name_prefix  = local.name_prefix
   force_delete = var.ecr_force_delete
@@ -119,7 +118,7 @@ resource "aws_secretsmanager_secret_version" "jwt" {
 # ── 5. IAM (roles before OpenSearch domain) ───────────────────────────────────
 
 module "iam" {
-  source = "../../modules/iam"
+  source = "../modules/iam"
 
   name_prefix        = local.name_prefix
   secret_arns        = [aws_secretsmanager_secret.db.arn, aws_secretsmanager_secret.jwt.arn, aws_secretsmanager_secret.opensearch.arn]
@@ -130,7 +129,7 @@ module "iam" {
 # ── 6. RDS ────────────────────────────────────────────────────────────────────
 
 module "rds" {
-  source = "../../modules/rds"
+  source = "../modules/rds"
 
   name_prefix           = local.name_prefix
   vpc_id                = module.vpc.vpc_id
@@ -162,7 +161,7 @@ resource "aws_secretsmanager_secret_version" "db" {
 # ── 7. OpenSearch ─────────────────────────────────────────────────────────────
 
 module "opensearch" {
-  source = "../../modules/opensearch"
+  source = "../modules/opensearch"
 
   name_prefix            = local.name_prefix
   domain_name            = replace("${local.name_prefix}-search", "-", "")
@@ -211,7 +210,7 @@ resource "aws_iam_role_policy" "ecs_task_opensearch" {
 # ── 8. ALB ────────────────────────────────────────────────────────────────────
 
 module "alb" {
-  source = "../../modules/alb"
+  source = "../modules/alb"
 
   name_prefix       = local.name_prefix
   vpc_id            = module.vpc.vpc_id
@@ -242,7 +241,7 @@ resource "aws_security_group_rule" "app_from_alb_ui" {
 # ── 9. ECS ────────────────────────────────────────────────────────────────────
 
 module "ecs" {
-  source = "../../modules/ecs"
+  source = "../modules/ecs"
 
   name_prefix           = local.name_prefix
   vpc_id                = module.vpc.vpc_id
